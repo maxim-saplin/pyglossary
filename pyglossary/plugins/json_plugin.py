@@ -47,7 +47,19 @@ class Writer(object):
 		ascii = encoding == "ascii"
 
 		def escape(st):
-			return dumps(st, ensure_ascii=ascii)
+			#remove styling from HTML tags
+			st2 = re.sub(r' style="[^"]*"', '', st) 
+			st2 = re.sub(r' class="[^"]*"', '', st2) 
+			st2 = re.sub(r'<font [^>]*>', '', st2) 
+			st2 = re.sub(r'</font>', '', st2) 
+			st2 = re.sub(r'\n', '', st2) 
+			st2 = re.sub(r'<div></div>', '', st2) 
+			st2 = re.sub(r'<span></span>', '', st2) 
+			#fix russina dictionary issues, such as hypenation in word (e.g. абб{[']}а{[/']}т)
+			st2 = re.sub(r"\{\['\]\}", "", st2)
+			st2 = re.sub(r"\{\[/'\]\}", "", st2) 
+			return dumps(st2, ensure_ascii=ascii)
+
 
 		yield from writeTxt(
 			glos,

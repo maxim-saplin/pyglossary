@@ -86,13 +86,3 @@ class GlossaryType(object):
 		resources: bool = True,
 	) -> "Generator[None, BaseEntry, None]":
 		raise NotImplementedError
-
-	def iterJsonLines(
-		self,
-		filename: str = "",
-		infoKeys: Optional[List] = None,
-		addExtraInfo: bool = True,
-		newline: str = "\\n",
-		transaction: bool = False,
-	) -> Iterator[str]:
-		raise NotImplementedError
