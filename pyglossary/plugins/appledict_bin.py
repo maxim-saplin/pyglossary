@@ -21,7 +21,7 @@ from zlib import decompress
 
 enable = True
 format = "AppleDictBin"
-description = "AppleDict Binary (.dictionary)"
+description = "AppleDict Binary"
 extensions = (".dictionary", ".data",)
 singleFile = True
 tools = [
@@ -35,24 +35,25 @@ tools = [
 optionsProp = {
 	"html": BoolOption(),
 }
-depends = {
-	"lxml": "lxml",
-}
 
 
 class Reader(object):
+	depends = {
+		"lxml": "lxml",
+	}
+
+	_html: bool = False
+
 	def __init__(self, glos):
 		self._glos = glos
 		self._filename = ""
 		self._file = None
 		self._encoding = "utf-8"
 		self._buf = ""
-		self._html = False
 		self._defiFormat = "m"
 
-	def open(self, filename, html: bool = False):
-		self._html = html
-		self._defiFormat = "h" if html else "m"
+	def open(self, filename):
+		self._defiFormat = "h" if self._html else "m"
 		parts = filename.split(os.sep)
 		dbname = parts[-1]
 		if isdir(filename):
@@ -107,14 +108,14 @@ class Reader(object):
 			raise e
 		return chunkSize, plus
 
-	def _readEntry(self, pos: int) -> Tuple["BaseEntry", int]:
+	def _readEntry(self, pos: int) -> "Tuple[BaseEntry, int]":
 		"""
 			returns (entry, pos)
 		"""
 		try:
 			from lxml import etree
 		except ModuleNotFoundError as e:
-			e.msg += ", run `sudo pip3 install lxml` to install"
+			e.msg += f", run `{pip} install lxml` to install"
 			raise e
 		chunkSize, plus = self.getChunkSize(pos)
 		pos += plus
@@ -132,7 +133,7 @@ class Reader(object):
 		try:
 			entryRoot = etree.fromstring(entryFull)
 		except etree.XMLSyntaxError as e:
-			log.error(f"\n{self._buf[pos-plus:pos+100]}")
+			log.error(f"{self._buf[pos-plus:pos+100]}")
 			log.error(
 				f"chunkSize={chunkSize}, plus={plus}, pos={pos}, len(buf)={len(self._buf)}"
 			)
@@ -143,10 +144,16 @@ class Reader(object):
 			return None, pos
 		word = entryElems[0].xpath("./@d:title", namespaces=entryRoot.nsmap)[0]
 		if self._html:
-			defi = self.decode(etree.tostring(entryElems[0]))
+			defi = self.decode(etree.tostring(
+				entryElems[0],
+				encoding="utf-8",
+			))
 		else:
 			defi = "".join([
-				self.decode(etree.tostring(child))
+				self.decode(etree.tostring(
+					child,
+					encoding="utf-8",
+				))
 				for child in entryElems[0].iterdescendants()
 			])
 		pos += chunkSize

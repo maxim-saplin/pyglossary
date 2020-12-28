@@ -6,7 +6,7 @@ from pyglossary.file_utils import fileCountLines
 
 enable = True
 format = "LingoesLDF"
-description = "Lingoes Source (LDF)"
+description = "Lingoes Source (.ldf)"
 extensions = (".ldf",)
 singleFile = True
 optionsProp = {
@@ -14,7 +14,6 @@ optionsProp = {
 	"resources": BoolOption(),
 	"encoding": EncodingOption(),
 }
-depends = {}
 
 tools = [
 	{
@@ -28,17 +27,10 @@ You will can do it yourself after the creator release."""
 	},
 ]
 
-infoKeys = [
-	"title",
-	"description",
-	"author",
-	"email",
-	"website",
-	"copyright",
-]
-
 
 class Reader(TextGlossaryReader):
+	compressions = stdCompressions
+
 	def __len__(self):
 		if self._wordCount is None:
 			log.debug("Try not to use len(reader) as it takes extra time")
@@ -65,7 +57,7 @@ class Reader(TextGlossaryReader):
 			raise StopIteration
 		entryLines = []
 		while True:
-			line = self._file.readline()
+			line = self.readline()
 			if not line:
 				raise StopIteration
 			line = line.rstrip("\n\r")  # FIXME
@@ -96,27 +88,50 @@ class Reader(TextGlossaryReader):
 			return word, defi
 
 
-def write(
-	glos: GlossaryType,
-	filename: str,
-	newline: str = "\n",
-	resources: str = True,
-):
-	g = glos
-	head = "\n".join([
-		f"###{key.capitalize()}: {g.getInfo(key)}"
-		for key in infoKeys
-	])
-	head += "\n"
-	g.writeTxt(
-		entryFmt="{word}\n{defi}\n\n",
-		filename=filename,
-		writeInfo=False,
-		rplList=(
-			("\n", "<br/>"),
-		),
-		ext=".ldf",
-		head=head,
-		newline=newline,
-		resources=resources,
-	)
+class Writer(object):
+	compressions = stdCompressions
+
+	_newline: str = "\n"
+	_resources: str = True
+
+	def __init__(self, glos: GlossaryType) -> None:
+		self._glos = glos
+		self._filename = None
+
+	def getInfo(self, key):
+		return self._glos.getInfo(key).replace("\n", "<br>")
+
+	def getAuthor(self):
+		return self._glos.getAuthor().replace("\n", "<br>")
+
+	def finish(self):
+		self._filename = None
+
+	def open(self, filename: str):
+		self._filename = filename
+
+	def write(self) -> "Generator[None, BaseEntry, None]":
+		from pyglossary.text_writer import writeTxt
+		newline = self._newline
+		resources = self._resources
+		head = (
+			f"###Title: {self.getInfo('title')}\n"
+			f"###Description: {self.getInfo('description')}\n"
+			f"###Author: {self.getAuthor()}\n"
+			f"###Email: {self.getInfo('email')}\n"
+			f"###Website: {self.getInfo('website')}\n"
+			f"###Copyright: {self.getInfo('copyright')}\n"
+		)
+		yield from writeTxt(
+			self._glos,
+			entryFmt="{word}\n{defi}\n\n",
+			filename=self._filename ,
+			writeInfo=False,
+			defiEscapeFunc=replaceStringTable([
+				("\n", "<br/>"),
+			]),
+			ext=".ldf",
+			head=head,
+			newline=newline,
+			resources=resources,
+		)

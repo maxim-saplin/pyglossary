@@ -1,50 +1,40 @@
 # -*- coding: utf-8 -*-
 
-from typing import (
-	List,
-	Tuple,
-	Callable,
-	Union,
-	Any,
-	Optional,
-)
+MultiStr = "Union[str, List[str]]"
 
-MultiStr = Union[str, List[str]]
-
-RawEntryType = Union[
+RawEntryType = """Union[
 	bytes,  # compressed
 	Tuple[bytes, bytes],  # uncompressed, without defiFormat
 	Tuple[bytes, bytes, str],  # uncompressed, with defiFormat
-]
+]"""
 
 
 class BaseEntry(object):
+	__slots__ = []
+
 	def isData(self) -> bool:
 		raise NotImplementedError
 
 	def getFileName(self) -> str:
 		raise NotImplementedError
 
-	def getData(self) -> bytes:
+	@property
+	def data(self) -> bytes:
 		raise NotImplementedError
 
 	def save(self, directory: str) -> str:
 		raise NotImplementedError
 
 	@property
-	def word(self) -> str:
+	def s_word(self) -> str:
 		raise NotImplementedError
 
 	@property
-	def words(self) -> List[str]:
+	def l_word(self) -> "List[str]":
 		raise NotImplementedError
 
 	@property
 	def defi(self) -> str:
-		raise NotImplementedError
-
-	@property
-	def defis(self) -> List[str]:
 		raise NotImplementedError
 
 	@property
@@ -54,7 +44,7 @@ class BaseEntry(object):
 				and all the alternate words
 				seperated by b"|"
 		"""
-		return self.word.encode("utf-8")
+		return self.s_word.encode("utf-8")
 
 	@property
 	def b_defi(self):
@@ -71,7 +61,7 @@ class BaseEntry(object):
 		raise NotImplementedError
 
 	@defiFormat.setter
-	def setDefiFormat(self, defiFormat: str) -> None:
+	def defiFormat(self, defiFormat: str) -> None:
 		# TODO: type: Literal["m", "h", "x", "b"]
 		raise NotImplementedError
 
@@ -81,10 +71,10 @@ class BaseEntry(object):
 	def addAlt(self, alt: str) -> None:
 		raise NotImplementedError
 
-	def editFuncWord(self, func: Callable[[str], str]) -> None:
+	def editFuncWord(self, func: "Callable[[str], str]") -> None:
 		raise NotImplementedError
 
-	def editFuncDefi(self, func: Callable[[str], str]) -> None:
+	def editFuncDefi(self, func: "Callable[[str], str]") -> None:
 		raise NotImplementedError
 
 	def strip(self) -> None:
@@ -104,12 +94,13 @@ class BaseEntry(object):
 
 	@staticmethod
 	def getEntrySortKey(
-		key: Optional[Callable[[str], Any]] = None,
-	) -> Callable[["BaseEntry"], Any]:
+		key: "Optional[Callable[[str], Any]]" = None,
+	) -> "Callable[[BaseEntry], Any]":
 		raise NotImplementedError
 
 	@staticmethod
 	def getRawEntrySortKey(
-		key: Optional[Callable[[str], Any]] = None,
-	) -> Callable[[Tuple], str]:
+		glos: "GlossaryType",
+		key: "Optional[Callable[[str], Any]]" = None,
+	) -> "Callable[[Tuple], str]":
 		raise NotImplementedError

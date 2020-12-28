@@ -3,8 +3,8 @@
 # Copyright © 2008-2020 Saeed Rasooli <saeed.gnu@gmail.com> (ilius)
 # Copyright © 2011-2012 kubtek <kubtek@gmail.com>
 # This file is part of PyGlossary project, http://github.com/ilius/pyglossary
-# Thanks to Raul Fernandes <rgfbr@yahoo.com.br> and Karl Grill
-#	   for reverse engineering
+# Thanks to Raul Fernandes <rgfbr@yahoo.com.br> and Karl Grill for reverse
+# engineering as part of https://sourceforge.net/projects/ktranslator/
 #
 # This program is a free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -126,8 +126,9 @@ class BabylonLanguage(object):
 			(cp1250, cp1251, cp1252)
 		code - value of the type 3, code in .bgl file
 	"""
-	def __init__(self, name, charset, encoding, code, code2=""):
+	def __init__(self, name, charset, encoding, code, code2="", name2=""):
 		self.name = name
+		self.name2 = name2
 		self.charset = charset
 		self.encoding = encoding
 		self.code = code
@@ -198,18 +199,20 @@ languages = (
 		code2="ja",
 	),
 	BabylonLanguage(
-		name="Chinese (T)",  # map to "Chinese"?
+		name="Chinese",
+		name2="Traditional Chinese",
 		charset="Traditional Chinese",
 		encoding="cp950",
 		code=0x09,
-		code2="zh",  # duplicate
+		code2="zh",
 	),
 	BabylonLanguage(
-		name="Chinese (S)",  # map to "Chinese"?
+		name="Chinese",
+		name2="Simplified Chinese",
 		charset="Simplified Chinese",
 		encoding="cp936",
 		code=0x0a,
-		code2="zh",  # duplicate
+		code2="zh",
 	),
 	BabylonLanguage(
 		name="Greek",
@@ -261,14 +264,16 @@ languages = (
 		code2="",  # none
 	),
 	BabylonLanguage(
-		name="Other Simplified Chinese dialects",
+		name="Chinese",
+		name2="Other Simplified Chinese dialects",
 		charset="Simplified Chinese",
 		encoding="cp936",
 		code=0x12,
 		code2="zh",  # duplicate
 	),
 	BabylonLanguage(
-		name="Other Traditional Chinese dialects",
+		name="Chinese",
+		name2="Other Traditional Chinese dialects",
 		charset="Traditional Chinese",
 		encoding="cp950",
 		code=0x13,
@@ -573,4 +578,3 @@ languages = (
 	),
 )
 languageByCode = {lang.code: lang for lang in languages}
-languageByName = {lang.name: lang for lang in languages}

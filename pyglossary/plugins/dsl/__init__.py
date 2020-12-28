@@ -19,10 +19,12 @@
 # GNU General Public License for more details.
 
 import re
+import html
 import html.entities
 from xml.sax.saxutils import escape, quoteattr
 
-from formats_common import *
+from pyglossary.plugins.formats_common import *
+from pyglossary.text_reader import TextFilePosWrapper
 
 from . import layer
 from . import tag
@@ -32,7 +34,7 @@ from .main import (
 
 enable = True
 format = "ABBYYLingvoDSL"
-description = "ABBYY Lingvo DSL (dsl)"
+description = "ABBYY Lingvo DSL (.dsl)"
 extensions = (".dsl",)
 singleFile = True
 optionsProp = {
@@ -40,12 +42,12 @@ optionsProp = {
 	"audio": BoolOption(),
 	"onlyFixMarkUp": BoolOption(),
 }
-depends = {}
 
 tools = [
 	{
 		"name": "ABBYY Lingvo",
-		"web": "https://www.abbyy.com/",
+		"web": "https://www.lingvo.ru/",
+		# https://ru.wikipedia.org/wiki/ABBYY_Lingvo
 		"platforms": [
 			"Windows",
 			"Mac",
@@ -120,24 +122,6 @@ def ref_sub(x):
 shortcuts = [
 	# canonical: m > * > ex > i > c
 	(
-		"[i][c](.*?)[/c][/i]",
-		"<i style=\"color:green\">\\g<1></i>"
-	),
-	(
-		"[m(\\d)][ex](.*?)[/ex][/m]",
-		"<div class=\"ex\" "
-		"style=\"margin-left:\\g<1>em;color:steelblue\">\\g<2></div>"
-	),
-	(
-		"[m(\\d)][*][ex](.*?)[/ex][/*][/m]",
-		"<div class=\"sec ex\" "
-		"style=\"margin-left:\\g<1>em;color:steelblue\">\\g<2></div>"
-	),
-	(
-		"[*][ex](.*?)[/ex][/*]",
-		"<span class=\"sec ex\" style=\"color:steelblue\">\\g<1></span>"
-	),
-	(
 		"[m1](?:-{2,})[/m]",
 		"<hr/>"
 	),
@@ -181,15 +165,11 @@ def apply_shortcuts(line):
 
 def _clean_tags(line, audio):
 	r"""
-	WARNING! shortcuts may apply:
-		[m2][*][ex]{}[/ex][/*][/m]
-		=>
-		<div class="sec ex" style="margin-left:2em;color:steelblue">{}</div>
 	[m{}] => <div style="margin-left:{}em">
 	[*]   => <span class="sec">
-	[ex]  => <span class="ex" style="color:steelblue">
-	[c]   => <span style="color:green">
-	[p]   => <i class="p" style="color:green">
+	[ex]  => <span class="ex"><font color="steelblue">
+	[c]   => <font color="green">
+	[p]   => <i class="p"><font color="green">
 
 	[']   => <u>
 	[b]   => <b>
@@ -207,7 +187,7 @@ def _clean_tags(line, audio):
 			</object>
 	[s] =>  <img align="top" src="{}" alt="{}" />
 
-	[t] => <!-- T --><span style="font-family:'Helvetica'">
+	[t] => <font face="Helvetica" class="dsl_t">
 
 	{{...}}   \
 	[trn]      |
@@ -235,12 +215,16 @@ def _clean_tags(line, audio):
 	line = re_lang_open.sub("", line).replace("[/lang]", "")
 	# remove com tags
 	line = line.replace("[com]", "").replace("[/com]", "")
+
+	# escape html special characters like '<' and '>'
+	line = html.escape(html.unescape(line))
+
 	# remove t tags
 	line = line.replace(
 		"[t]",
-		"<!-- T --><span style=\"font-family:'Helvetica'\">"
+		"<font face=\"Helvetica\" class=\"dsl_t\">"
 	)
-	line = line.replace("[/t]", "</span><!-- T -->")
+	line = line.replace("[/t]", "</font>")
 
 	line = _parse(line)
 
@@ -269,21 +253,21 @@ def _clean_tags(line, audio):
 	line = line.replace("[sub]", "<sub>").replace("[/sub]", "</sub>")
 
 	# color
-	line = line.replace("[c]", "<span style=\"color:green\">")
-	line = re_c_open_color.sub("<span style=\"color:\\g<1>\">", line)
-	line = line.replace("[/c]", "</span>")
+	line = line.replace("[c]", "<font color=\"green\">")
+	line = re_c_open_color.sub("<font color=\"\\g<1>\">", line)
+	line = line.replace("[/c]", "</font>")
 
 	# example zone
-	line = line.replace("[ex]", "<span class=\"ex\" style=\"color:steelblue\">")
-	line = line.replace("[/ex]", "</span>")
+	line = line.replace("[ex]", "<span class=\"ex\"><font color=\"steelblue\">")
+	line = line.replace("[/ex]", "</font></span>")
 
 	# secondary zone
 	line = line.replace("[*]", "<span class=\"sec\">")\
 		.replace("[/*]", "</span>")
 
 	# abbrev. label
-	line = line.replace("[p]", "<i class=\"p\" style=\"color:green\">")
-	line = line.replace("[/p]", "</i>")
+	line = line.replace("[p]", "<i class=\"p\"><font color=\"green\">")
+	line = line.replace("[/p]", "</font></i>")
 
 	# cross reference
 	line = line.replace("[ref]", "<<").replace("[/ref]", ">>")
@@ -316,14 +300,21 @@ def unwrap_quotes(s):
 
 
 class Reader(object):
+	compressions = stdCompressions + ("dz",)
+
+	_encoding: str = ""
+	_audio: bool = False
+	_onlyFixMarkUp: bool = False
+
 	re_tags_open = re.compile(r"(?<!\\)\[(c |[cuib]\])")
 	re_tags_close = re.compile(r"\[/[cuib]\]")
 
 	def __init__(self, glos: GlossaryType):
 		self._glos = glos
-		self._audio = False
 		self.clean_tags = _clean_tags
 		self._file = None
+		self._fileSize = 0
+		self._bufferLine = ""
 
 	def close(self):
 		if self._file:
@@ -340,27 +331,48 @@ class Reader(object):
 	def open(
 		self,
 		filename: str,
-		encoding: str = "",
-		audio: bool = False,
-		onlyFixMarkUp: bool = False,
 	) -> None:
 		self._filename = filename
-		self._audio = audio
-		if onlyFixMarkUp:
+		if self._onlyFixMarkUp:
 			self.clean_tags = self._clean_tags_only_markup
 		else:
 			self.clean_tags = _clean_tags
 
+		encoding = self._encoding
 		if not encoding:
 			encoding = self.detectEncoding()
-		self._file = open(filename, "r", encoding=encoding)
+		cfile = compressionOpen(
+			filename,
+			dz=True,
+			mode="rt",
+			encoding=encoding,
+		)
+		cfile.seek(0, 2)
+		self._fileSize = cfile.tell()
+		cfile.seek(0)
+		self._file = TextFilePosWrapper(cfile, encoding)
+
+		# read header
+		for line in self._file:
+			line = line.rstrip()
+			if not line:
+				continue
+			if not line.startswith("#"):
+				self._bufferLine = line
+				break
+			self.processHeaderLine(line)
 
 	def detectEncoding(self):
 		for testEncoding in ("utf-8", "utf-16"):
-			with open(self._filename, "r", encoding=testEncoding) as fp:
+			with compressionOpen(
+				self._filename,
+				dz=True,
+				mode="rt",
+				encoding=testEncoding,
+			) as fileObj:
 				try:
 					for i in range(10):
-						fp.readline()
+						fileObj.readline()
 				except UnicodeDecodeError:
 					log.info(f"Encoding of DSL file is not {testEncoding}")
 					continue
@@ -377,13 +389,21 @@ class Reader(object):
 
 	def processHeaderLine(self, line):
 		if line.startswith("#NAME"):
-			self.setInfo("name", line[6:])
+			self.setInfo("name", unwrap_quotes(line[6:].strip()))
 		elif line.startswith("#INDEX_LANGUAGE"):
-			self.setInfo("sourceLang", line[16:])
+			self._glos.sourceLangName = unwrap_quotes(line[16:].strip())
 		elif line.startswith("#CONTENTS_LANGUAGE"):
-			self.setInfo("targetLang", line[19:])
+			self._glos.targetLangName = unwrap_quotes(line[19:].strip())
 
-	def __iter__(self) -> Iterator[BaseEntry]:
+	def _iterLines(self) -> "Iterator[str]":
+		if self._bufferLine:
+			line = self._bufferLine
+			self._bufferLine = ""
+			yield line
+		for line in self._file:
+			yield line
+
+	def __iter__(self) -> "Iterator[BaseEntry]":
 		current_key = ""
 		current_key_alters = []
 		current_text = []
@@ -392,14 +412,9 @@ class Reader(object):
 		re_tags_open = self.re_tags_open
 		re_tags_close = self.re_tags_close
 
-		for line in self._file:
+		for line in self._iterLines():
 			line = line.rstrip()
 			if not line:
-				continue
-			# header
-			if line.startswith("#"):
-				self.processHeaderLine(line)
-				line_type = "header"
 				continue
 
 			# texts
@@ -438,6 +453,7 @@ class Reader(object):
 				yield self._glos.newEntry(
 					[current_key] + current_key_alters,
 					"\n".join(current_text),
+					byteProgress=(self._file.tell(), self._fileSize),
 				)
 
 			# start new entry

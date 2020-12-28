@@ -9,14 +9,6 @@ from os.path import (
 	dirname,
 	getsize,
 )
-from typing import (
-	Optional,
-	Tuple,
-	List,
-	Dict,
-	Callable,
-	Any,
-)
 
 from .entry_base import BaseEntry, MultiStr, RawEntryType
 from .iter_utils import unique_everseen
@@ -25,15 +17,28 @@ from pickle import dumps, loads
 from zlib import compress, decompress
 
 import logging
-log = logging.getLogger("root")
+log = logging.getLogger("pyglossary")
 
 
-# or Resource?
+# aka Resource
 class DataEntry(BaseEntry):
+	__slots__ = [
+		"_fname",
+		"_data",
+		"_tmpPath",
+		"_byteProgress",
+	]
+
 	def isData(self) -> bool:
 		return True
 
-	def __init__(self, fname: str, data: bytes, inTmp: bool = False) -> None:
+	def __init__(
+		self,
+		fname: str,
+		data: bytes,
+		inTmp: bool = False,
+		byteProgress: "Optional[Tuple[int, int]]" = None,
+	) -> None:
 		assert isinstance(fname, str)
 		assert isinstance(data, bytes)
 		assert isinstance(inTmp, bool)
@@ -49,11 +54,13 @@ class DataEntry(BaseEntry):
 		self._fname = fname
 		self._data = data  # bytes instance
 		self._tmpPath = tmpPath
+		self._byteProgress = byteProgress  # Optional[Tuple[int, int]]
 
 	def getFileName(self) -> str:
 		return self._fname
 
-	def getData(self) -> bytes:
+	@property
+	def data(self) -> bytes:
 		if self._tmpPath:
 			with open(self._tmpPath, "rb") as fromFile:
 				return fromFile.read()
@@ -71,54 +78,40 @@ class DataEntry(BaseEntry):
 		# fix filename depending on operating system? FIXME
 		fpath = join(directory, fname)
 		fdir = dirname(fpath)
-		if not exists(fdir):
-			os.makedirs(fdir)
-		if self._tmpPath:
-			shutil.move(self._tmpPath, fpath)
-			self._tmpPath = fpath
-		else:
-			with open(fpath, "wb") as toFile:
-				toFile.write(self._data)
+		try:
+			os.makedirs(fdir, mode=0o755, exist_ok=True)
+			if self._tmpPath:
+				shutil.move(self._tmpPath, fpath)
+				self._tmpPath = fpath
+			else:
+				with open(fpath, "wb") as toFile:
+					toFile.write(self._data)
+		except Exception:
+			log.exception(f"error while saving {fpath}")
+			return ""
 		return fpath
 
 	@property
-	def word(self) -> str:
+	def s_word(self) -> str:
 		return self._fname
 
 	@property
-	def words(self) -> List[str]:
+	def l_word(self) -> "List[str]":
 		return [self._fname]
 
 	@property
 	def defi(self) -> str:
 		return f"File: {self._fname}"
 
-	@property
-	def defis(self) -> List[str]:
-		return [self.defi]
-
-	def getWord(self) -> str:
-		log.error("entry.getWord() is deprecated, use entry.word")
-		return self.word
-
-	def getWords(self) -> List[str]:
-		log.error("entry.getWords() is deprecated, use entry.words")
-		return self.words
-
-	def getDefi(self) -> str:
-		log.error("entry.getDefi() is deprecated, use entry.defi")
-		return self.defi
-
-	def getDefis(self) -> List[str]:
-		log.error("entry.getDefis() is deprecated, use entry.defis")
-		return self.defis
+	def byteProgress(self):
+		return self._byteProgress
 
 	@property
 	def defiFormat(self) -> 'Literal["b"]':
 		return "b"
 
 	@defiFormat.setter
-	def setDefiFormat(self, defiFormat):
+	def defiFormat(self, defiFormat: str) -> None:
 		pass
 
 	def detectDefiFormat(self) -> None:
@@ -127,12 +120,12 @@ class DataEntry(BaseEntry):
 	def addAlt(self, alt: str) -> None:
 		pass
 
-	def editFuncWord(self, func: Callable[[str], str]) -> None:
+	def editFuncWord(self, func: "Callable[[str], str]") -> None:
 		pass
 		# modify fname?
 		# FIXME
 
-	def editFuncDefi(self, func: Callable[[str], str]) -> None:
+	def editFuncDefi(self, func: "Callable[[str], str]") -> None:
 		pass
 
 	def strip(self) -> None:
@@ -150,7 +143,7 @@ class DataEntry(BaseEntry):
 	def removeEmptyAndDuplicateAltWords(self):
 		pass
 
-	def getRaw(self, glos: "GlossaryType") -> RawEntryType:
+	def getRaw(self, glos: "GlossaryType") -> "RawEntryType":
 		b_fpath = b""
 		if glos.tmpDataDir:
 			b_fpath = self.save(glos.tmpDataDir).encode("utf-8")
@@ -164,14 +157,16 @@ class DataEntry(BaseEntry):
 		return tpl
 
 	@classmethod
-	def fromFile(cls, glos, word, fpath):
-		entry = DataEntry(word, b"")
-		entry._tmpPath = fpath
+	def fromFile(cls, glos, relPath, fullPath):
+		entry = DataEntry(relPath, b"")
+		entry._tmpPath = fullPath
 		return entry
 
 
 class Entry(BaseEntry):
 	sep = "|"
+	b_sep = b"|"
+	xdxfPattern = re.compile("^<k>[^<>]*</k>", re.S | re.I)
 	htmlPattern = re.compile(
 		".*(?:" + "|".join([
 			r"<font[ >]",
@@ -190,49 +185,73 @@ class Entry(BaseEntry):
 			r"<ul[ >]",
 			r"<ol[ >]",
 			r"<li[ >]",
-		]) + ")",
-		re.S,
+			r"<h[1-6][ >]",
+		]) + "|&[a-z]{2,8};|&#x?[0-9]{2,5};)",
+		re.S | re.I,
 	)
+
+	__slots__ = [
+		"_word",
+		"_defi",
+		"_defiFormat",
+		"_byteProgress",
+	]
 
 	def isData(self) -> bool:
 		return False
 
-	def _join(self, parts: List[str]) -> str:
-		return self.sep.join([
-			part.replace(self.sep, "\\" + self.sep)
+	def _join(self, parts: "List[str]") -> str:
+		return Entry.sep.join([
+			part.replace(Entry.sep, "\\" + Entry.sep)
 			for part in parts
 		])
 
 	@staticmethod
-	def defaultSortKey(b_word: bytes) -> Any:
+	def defaultStringSortKey(word: str) -> "Any":
+		return Entry.defaultSortKey(word.encode("utf-8"))
+
+	@staticmethod
+	def defaultSortKey(b_word: bytes) -> "Any":
 		return b_word.lower()
 
 	@staticmethod
 	def getEntrySortKey(
-		key: Optional[Callable[[bytes], Any]] = None,
-	) -> Callable[[BaseEntry], Any]:
+		key: "Optional[Callable[[bytes], Any]]" = None,
+	) -> "Callable[[BaseEntry], Any]":
 		if key is None:
 			key = Entry.defaultSortKey
-		return lambda entry: key(entry.words[0].encode("utf-8"))
+		return lambda entry: key(entry.l_word[0].encode("utf-8"))
 
 	@staticmethod
 	def getRawEntrySortKey(
-		key: Optional[Callable[[bytes], Any]] = None,
-	) -> Callable[[Tuple], Any]:
+		glos: "GlossaryType",
+		key: "Optional[Callable[[bytes], Any]]" = None,
+	) -> "Callable[[Tuple], Any]":
 		# here `x` is raw entity, meaning a tuple of form (word, defi) or
 		# (word, defi, defiFormat)
 		# so x[0] is word(s) in bytes, that can be a str (one word),
 		# or a list or tuple (one word with or more alternaties)
 		if key is None:
 			key = Entry.defaultSortKey
-		return lambda x: key(loads(decompress(x))[0])
+
+		if glos.getConfig("enable_alts", True):
+			b_sep = Entry.b_sep
+			if glos._rawEntryCompress:
+				return lambda x: key(loads(decompress(x))[0].split(b_sep)[0])
+			else:
+				return lambda x: key(x[0].split(b_sep)[0])
+		else:
+			if glos._rawEntryCompress:
+				return lambda x: key(loads(decompress(x))[0])
+			else:
+				return lambda x: key(x[0])
 
 	def __init__(
 		self,
 		word: MultiStr,
 		defi: MultiStr,
 		defiFormat: str = "m",
-		byteProgress: Optional[Tuple[int, int]] = None,
+		byteProgress: "Optional[Tuple[int, int]]" = None,
 	) -> None:
 		"""
 			word: string or a list of strings (including alternate words)
@@ -264,9 +283,14 @@ class Entry(BaseEntry):
 		self._defiFormat = defiFormat
 		self._byteProgress = byteProgress  # Optional[Tuple[int, int]]
 
+	def __repr__(self):
+		return (
+			f"Entry({self._word!r}, {self._defi!r}, "
+			f"defiFormat={self._defiFormat!r})"
+		)
 
 	@property
-	def word(self):
+	def s_word(self):
 		"""
 			returns string of word,
 				and all the alternate words
@@ -278,7 +302,7 @@ class Entry(BaseEntry):
 			return self._join(self._word)
 
 	@property
-	def words(self) -> List[str]:
+	def l_word(self) -> "List[str]":
 		"""
 			returns list of the word and all the alternate words
 		"""
@@ -290,40 +314,9 @@ class Entry(BaseEntry):
 	@property
 	def defi(self) -> str:
 		"""
-			returns string of definition,
-				and all the alternate definitions
-				seperated by "|"
+			returns string of definition
 		"""
-		if isinstance(self._defi, str):
-			return self._defi
-		else:
-			return self._join(self._defi)
-
-	@property
-	def defis(self) -> List[str]:
-		"""
-			returns list of the definition and all the alternate definitions
-		"""
-		if isinstance(self._defi, str):
-			return [self._defi]
-		else:
-			return self._defi
-
-	def getWord(self) -> str:
-		log.error("entry.getWord() is deprecated, use entry.word")
-		return self.word
-
-	def getWords(self) -> List[str]:
-		log.error("entry.getWords() is deprecated, use entry.words")
-		return self.words
-
-	def getDefi(self) -> str:
-		log.error("entry.getDefi() is deprecated, use entry.defi")
-		return self.defi
-
-	def getDefis(self) -> List[str]:
-		log.error("entry.getDefis() is deprecated, use entry.defis")
-		return self.defis
+		return self._defi
 
 	@property
 	def defiFormat(self) -> str:
@@ -337,7 +330,7 @@ class Entry(BaseEntry):
 		return self._defiFormat
 
 	@defiFormat.setter
-	def setDefiFormat(self, defiFormat) -> str:
+	def defiFormat(self, defiFormat: str) -> None:
 		"""
 			defiFormat:
 				"m": plain text
@@ -349,19 +342,22 @@ class Entry(BaseEntry):
 	def detectDefiFormat(self) -> None:
 		if self._defiFormat != "m":
 			return
-		defi = self.defi.lower()
-		if self.htmlPattern.match(defi):
+		if Entry.xdxfPattern.match(self.defi):
+			self._defiFormat = "x"
+			return
+		if Entry.htmlPattern.match(self.defi):
 			self._defiFormat = "h"
+			return
 
 	def byteProgress(self):
 		return self._byteProgress
 
 	def addAlt(self, alt: str) -> None:
-		words = self.words
-		words.append(alt)
-		self._word = words
+		l_word = self.l_word
+		l_word.append(alt)
+		self._word = l_word
 
-	def editFuncWord(self, func: Callable[[str], str]) -> None:
+	def editFuncWord(self, func: "Callable[[str], str]") -> None:
 		"""
 			run function `func` on all the words
 			`func` must accept only one string as argument
@@ -374,18 +370,13 @@ class Entry(BaseEntry):
 				func(st) for st in self._word
 			)
 
-	def editFuncDefi(self, func: Callable[[str], str]) -> None:
+	def editFuncDefi(self, func: "Callable[[str], str]") -> None:
 		"""
 			run function `func` on all the definitions
 			`func` must accept only one string as argument
 			and return the modified string
 		"""
-		if isinstance(self._defi, str):
-			self._defi = func(self._defi)
-		else:
-			self._defi = tuple(
-				func(st) for st in self._defi
-			)
+		self._defi = func(self._defi)
 
 	def _stripTrailingBR(self, s: str) -> str:
 		while s.endswith('<BR>') or s.endswith('<br>'):
@@ -415,12 +406,7 @@ class Entry(BaseEntry):
 		"""
 			replace string `source` with `target` in all definitions
 		"""
-		if isinstance(self._defi, str):
-			self._defi = self._defi.replace(source, target)
-		else:
-			self._defi = tuple(
-				st.replace(source, target) for st in self._defi
-			)
+		self._defi = self._defi.replace(source, target)
 
 	def replace(self, source: str, target: str) -> None:
 		"""
@@ -430,12 +416,42 @@ class Entry(BaseEntry):
 		self.replaceInDefi(source, target)
 
 	def removeEmptyAndDuplicateAltWords(self):
-		words = self.words
-		if len(words) == 1:
+		l_word = self.l_word
+		if len(l_word) == 1:
 			return
-		words = [word for word in words if word]
-		words = list(unique_everseen(words))
-		self._word = words
+		l_word = [word for word in l_word if word]
+		l_word = list(unique_everseen(l_word))
+		self._word = l_word
+
+	def stripFullHtml(self) -> None:
+		defi = self._defi
+		if not defi.startswith('<'):
+			return
+		if defi.startswith('<!DOCTYPE html>'):
+			defi = defi[len('<!DOCTYPE html>'):].strip()
+			if not defi.startswith('<html'):
+				log.error(f"<html> not found: word={self.s_word}")
+				log.error(f"defi={defi[:100]}...")
+		else:
+			if not defi.startswith('<html>'):
+				return
+		word = self.s_word
+		i = defi.find('<body')
+		if i == -1:
+			log.error(f"<body not found: word={word}")
+			return
+		defi = defi[i + 5:]
+		i = defi.find('>')
+		if i == -1:
+			log.error(f"'>' after <body not found: word={word}")
+			return
+		defi = defi[i + 1:]
+		i = defi.find('</body')
+		if i == -1:
+			log.error(f"</body close not found: word={word}")
+			return
+		defi = defi[:i]
+		self._defi = defi
 
 	def getRaw(
 		self,
@@ -487,9 +503,8 @@ class Entry(BaseEntry):
 		else:
 			defiFormat = defaultDefiFormat
 
-		if glos.getPref("enable_alts", True):
+		if glos.getConfig("enable_alts", True):
 			word = word.split(cls.sep)
-			defi = defi.split(cls.sep)
 
 		return cls(
 			word,

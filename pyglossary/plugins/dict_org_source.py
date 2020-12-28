@@ -4,7 +4,7 @@ from formats_common import *
 
 enable = True
 format = "DictOrgSource"
-description = "DICT.org / dictfmt source file"
+description = "DICT.org dictfmt source file"
 extensions = (".dtxt",)
 singleFile = True
 optionsProp = {
@@ -21,21 +21,31 @@ tools = [
 ]
 
 
-def write(
-	glos,
-	filename: str,
-	remove_html_all: bool = True,
-) -> None:
-	rplList = [
-		("\r", ""),
-	]
-	if remove_html_all:
-		glos.removeHtmlTagsAll()
-	# TODO: add another bool flag to only remove html tags that are not
-	# supported by GtkTextView
-	glos.writeTxt(
-		entryFmt=":{word}:{defi}\n",
-		filename=filename,
-		rplList=rplList,
-		ext=".dtxt",
-	)
+class Writer(object):
+	_remove_html_all: bool = True
+
+	def __init__(self, glos: GlossaryType) -> None:
+		self._glos = glos
+		self._filename = None
+
+	def finish(self):
+		self._filename = None
+
+	def open(self, filename: str):
+		self._filename = filename
+		if self._remove_html_all:
+			self._glos.removeHtmlTagsAll()
+		# TODO: add another bool flag to only remove html tags that are not
+		# supported by GtkTextView
+
+	def write(self) -> "Generator[None, BaseEntry, None]":
+		from pyglossary.text_writer import writeTxt
+		yield from writeTxt(
+			self._glos,
+			entryFmt=":{word}:{defi}\n",
+			filename=self._filename,
+			defiEscapeFunc=replaceStringTable([
+				("\r", ""),
+			]),
+			ext=".dtxt",
+		)

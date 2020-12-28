@@ -4,14 +4,11 @@ from formats_common import *
 
 enable = True
 format = "GettextPo"
-description = "Gettext Source (po)"
+description = "Gettext Source (.po)"
 extensions = (".po",)
 singleFile = True
 optionsProp = {
 	"resources": BoolOption(),
-}
-depends = {
-	"polib": "polib",
 }
 
 tools = [
@@ -31,6 +28,10 @@ tools = [
 
 
 class Reader(object):
+	depends = {
+		"polib": "polib",
+	}
+
 	def __init__(self, glos: GlossaryType):
 		self._glos = glos
 		self.clear()
@@ -71,7 +72,7 @@ class Reader(object):
 		try:
 			from polib import unescape as po_unescape
 		except ModuleNotFoundError as e:
-			e.msg += ", run `sudo pip3 install polib` to install"
+			e.msg += f", run `{pip} install polib` to install"
 			raise e
 		word = ""
 		defi = ""
@@ -111,24 +112,48 @@ class Reader(object):
 		self._wordCount = wordCount
 
 
-def write(glos: GlossaryType, filename: str, resources: bool = True):
-	try:
-		from polib import escape as po_escape
-	except ModuleNotFoundError as e:
-		e.msg += ", run `sudo pip3 install polib` to install"
-		raise e
-	with open(filename, "w") as toFile:
-		toFile.write('#\nmsgid ""\nmsgstr ""\n')
-		for key, value in glos.iterInfo():
-			toFile.write(f'"{key}: {value}\\n"\n')
-		for entry in glos:
+class Writer(object):
+	depends = {
+		"polib": "polib",
+	}
+
+	_resources: bool = True
+
+	def __init__(self, glos: GlossaryType):
+		self._glos = glos
+		self._filename = None
+		self._file = None
+
+	def open(self, filename: str):
+		self._filename = filename
+		self._file = _file = open(filename, mode="wt", encoding="utf-8")
+		_file.write('#\nmsgid ""\nmsgstr ""\n')
+		for key, value in self._glos.iterInfo():
+			_file.write(f'"{key}: {value}\\n"\n')
+
+	def finish(self):
+		self._filename = None
+		if self._file:
+			self._file.close()
+			self._file = None
+
+	def write(self) -> "Generator[None, BaseEntry, None]":
+		try:
+			from polib import escape as po_escape
+		except ModuleNotFoundError as e:
+			e.msg += f", run `{pip} install polib` to install"
+			raise e
+		resources = self._resources
+		_file = self._file
+		while True:
+			entry = yield
+			if entry is None:
+				break
 			if entry.isData():
 				if resources:
 					entry.save(filename + "_res")
 				continue
-			word = entry.word
-			defi = entry.defi
-			toFile.write(
-				f"msgid {po_escape(word)}\n"
-				f"msgstr {po_escape(defi)}\n\n"
+			_file.write(
+				f"msgid {po_escape(entry.s_word)}\n"
+				f"msgstr {po_escape(entry.defi)}\n\n"
 			)

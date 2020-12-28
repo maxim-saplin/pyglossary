@@ -26,14 +26,13 @@ from os.path import splitext, isfile, isdir, extsep, basename, dirname
 
 enable = True
 format = "OctopusMdict"
-description = "Octopus MDict"
+description = "Octopus MDict (.mdx)"
 extensions = (".mdx",)
 singleFile = False
 optionsProp = {
 	"encoding": EncodingOption(),
 	"substyle": BoolOption(),
 }
-depends = {}
 
 tools = [
 	{
@@ -46,14 +45,16 @@ tools = [
 
 
 class Reader(object):
+	_encoding: str = ""
+	_substyle: bool = True
+
 	def __init__(self, glos):
 		self._glos = glos
 		self.clear()
+		self._re_internal_link = re.compile('href=(["\'])(entry://|[dx]:)')
 
 	def clear(self):
 		self._filename = ""
-		self._encoding = ""
-		self._substyle = True
 		self._mdx = None
 		self._mdd = []
 		self._wordCount = 0
@@ -62,11 +63,9 @@ class Reader(object):
 		# dict of mainWord -> newline-separated altenatives
 		self._linksDict = {}  # type: Dict[str, str]
 
-	def open(self, filename, encoding="", substyle=True):
+	def open(self, filename):
 		from pyglossary.plugin_lib.readmdict import MDX, MDD
 		self._filename = filename
-		self._encoding = encoding
-		self._substyle = substyle
 		self._mdx = MDX(filename, self._encoding, self._substyle)
 
 		filenameNoExt, ext = splitext(self._filename)
@@ -143,6 +142,8 @@ class Reader(object):
 			defi = b_defi.decode("utf-8").strip()
 			if defi.startswith("@@@LINK="):
 				continue
+			defi = self._re_internal_link.sub(r'href=\1bword://', defi)
+			defi = defi.replace(' src="file://', ' src="')
 			words = word
 			altsStr = linksDict.get(word, "")
 			if altsStr:

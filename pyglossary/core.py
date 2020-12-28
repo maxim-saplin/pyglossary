@@ -1,7 +1,6 @@
 import logging
 import traceback
 import inspect
-from pprint import pformat
 import sys
 import os
 from os.path import (
@@ -14,17 +13,25 @@ from os.path import (
 )
 import platform
 
-from typing import (
-	Dict,
-	Tuple,
-	Any,
-	Optional,
-	Type,
-)
+VERSION = "4.0.11"
 
-from types import TracebackType
+homePage = "https://github.com/ilius/pyglossary"
 
-VERSION = "3.3.0"
+
+TRACE = 5
+logging.addLevelName(TRACE, "TRACE")
+
+
+class Formatter(logging.Formatter):
+	def __init__(self, *args, **kwargs):
+		logging.Formatter.__init__(self, *args, **kwargs)
+		self.fill = None  # type: Optional[Callable[[str], str]]
+
+	def formatMessage(self, record):
+		msg = logging.Formatter.formatMessage(self, record)
+		if self.fill is not None:
+			msg = self.fill(msg)
+		return msg
 
 
 class MyLogger(logging.Logger):
@@ -34,6 +41,7 @@ class MyLogger(logging.Logger):
 		logging.WARNING,
 		logging.INFO,
 		logging.DEBUG,
+		TRACE,
 		logging.NOTSET,
 	)
 	levelNamesCap = [
@@ -42,25 +50,56 @@ class MyLogger(logging.Logger):
 		"Warning",
 		"Info",
 		"Debug",
+		"Trace",
 		"All",  # "Not-Set",
 	]
+
+	def __init__(self, *args):
+		logging.Logger.__init__(self, *args)
+		self._verbosity = 3
+		self._timeEnable = False
 
 	def setVerbosity(self, verbosity: int) -> None:
 		self.setLevel(self.levelsByVerbosity[verbosity])
 		self._verbosity = verbosity
 
 	def getVerbosity(self) -> int:
-		return getattr(self, "_verbosity", 3)  # FIXME
+		return self._verbosity
 
-	def pretty(self, data: Any, header: str = "") -> None:
+	def trace(self, msg: str):
+		self.log(TRACE, msg)
+
+	def pretty(self, data: "Any", header: str = "") -> None:
+		from pprint import pformat
 		self.debug(header + pformat(data))
 
 	def isDebug(self) -> bool:
 		return self.getVerbosity() >= 4
 
+	def newFormatter(self):
+		timeEnable = self._timeEnable
+		if timeEnable:
+			fmt = "%(asctime)s [%(levelname)s] %(message)s"
+		else:
+			fmt = "[%(levelname)s] %(message)s"
+		return Formatter(fmt)
+
+	def setTimeEnable(self, timeEnable: bool):
+		self._timeEnable = timeEnable
+		formatter = self.newFormatter()
+		for handler in self.handlers:
+			handler.setFormatter(formatter)
+
+	def addHandler(self, handler: "logging.Handler"):
+		# if want to add separate format (new config keys and flags) for ui_gtk
+		# and ui_tk, you need to remove this function and run handler.setFormatter
+		# in ui_gtk and ui_tk
+		logging.Logger.addHandler(self, handler)
+		handler.setFormatter(self.newFormatter())
+
 
 def formatVarDict(
-	dct: Dict[str, Any],
+	dct: "Dict[str, Any]",
 	indent: int = 4,
 	max_width: int = 80,
 ) -> str:
@@ -81,7 +120,7 @@ def formatVarDict(
 
 
 def format_exception(
-	exc_info: Optional[Tuple[Type, Exception, TracebackType]] = None,
+	exc_info: "Optional[Tuple[Type, Exception, types.TracebackType]]" = None,
 	add_locals: bool = False,
 	add_globals: bool = False,
 ) -> str:
@@ -105,15 +144,27 @@ def format_exception(
 
 
 class StdLogHandler(logging.Handler):
-	startRed = "\x1b[31m"
-	endFormat = "\x1b[0;0;0m"  # len=8
-
 	def __init__(self, noColor: bool = False):
 		logging.Handler.__init__(self)
+		self.set_name("std")
 		self.noColor = noColor
 
+	@property
+	def startRed(self):
+		if self.noColor:
+			return ""
+		return "\x1b[31m"
+
+	@property
+	def endFormat(self):
+		if self.noColor:
+			return ""
+		return "\x1b[0;0;0m"
+
 	def emit(self, record: logging.LogRecord) -> None:
-		msg = record.getMessage()
+		msg = ""
+		if record.getMessage():
+			msg = self.format(record)
 		###
 		if record.exc_info:
 			_type, value, tback = record.exc_info
@@ -129,7 +180,7 @@ class StdLogHandler(logging.Handler):
 			msg += tback_text
 		###
 		if record.levelname in ("CRITICAL", "ERROR"):
-			if not self.noColor:
+			if msg and not self.noColor:
 				msg = self.startRed + msg + self.endFormat
 			fp = sys.stderr
 		else:
@@ -137,12 +188,6 @@ class StdLogHandler(logging.Handler):
 		###
 		fp.write(msg + "\n")
 		fp.flush()
-
-#	def exception(self, msg: str) -> None:
-#		if not self.noColor:
-#			msg = self.startRed + msg + self.endFormat
-#		sys.stderr.write(msg + "\n")
-#		sys.stderr.flush()
 
 
 def checkCreateConfDir() -> None:
@@ -160,7 +205,7 @@ def checkCreateConfDir() -> None:
 # __________________________________________________________________________ #
 
 logging.setLoggerClass(MyLogger)
-log = logging.getLogger("root")
+log = logging.getLogger("pyglossary")
 
 sys.excepthook = lambda *exc_info: log.critical(
 	format_exception(
@@ -170,7 +215,10 @@ sys.excepthook = lambda *exc_info: log.critical(
 	)
 )
 
-sysName = platform.system()
+sysName = platform.system().lower()
+# platform.system() is in	["Linux", "Windows", "Darwin", "FreeBSD"]
+# sysName is in				["linux", "windows", "darwin', "freebsd"]
+
 
 # can set env var WARNINGS to:
 # "error", "ignore", "always", "default", "module", "once"
@@ -180,24 +228,31 @@ if os.getenv("WARNINGS"):
 
 
 if hasattr(sys, "frozen"):
+	# FIXME: was this for py2exe?
+	log.info(f"sys.frozen = {sys.frozen}")
 	rootDir = dirname(sys.executable)
-	uiDir = join(rootDir, "ui")
+	uiDir = join(rootDir, "pyglossary", "ui")
 else:
-	uiDir = dirname(realpath(__file__))
-	rootDir = dirname(uiDir)
+	_srcDir = dirname(realpath(__file__))
+	uiDir = join(_srcDir, "ui")
+	rootDir = dirname(_srcDir)
 
 dataDir = rootDir
 if dataDir.endswith("dist-packages") or dataDir.endswith("site-packages"):
-	dataDir = dirname(sys.argv[0])
+	parent3 = dirname(dirname(dirname(rootDir)))
+	if os.sep == "\\":
+		dataDir = join(parent3, "Python", "share", "pyglossary")
+	else:
+		dataDir = join(parent3, "share", "pyglossary")
 
 appResDir = join(dataDir, "res")
 
 if os.sep == "/":  # Operating system is Unix-Like
 	homeDir = os.getenv("HOME")
 	user = os.getenv("USER")
-	tmpDir = "/tmp"
+	tmpDir = os.getenv("TMPDIR", "/tmp")
 	# os.name == "posix" # FIXME
-	if sysName == "Darwin":  # MacOS X
+	if sysName == "darwin":  # MacOS X
 		_libDir = join(homeDir, "Library")
 		confDir = join(_libDir, "Preferences", "PyGlossary")
 		# or maybe: join(_libDir, "PyGlossary")
@@ -206,15 +261,21 @@ if os.sep == "/":  # Operating system is Unix-Like
 		# platform.dist() == ("", "", "")
 		# platform.release() == "10.3.0"
 		cacheDir = join(_libDir, "Caches", "PyGlossary")
-	else:  # GNU/Linux, ...
+		pip = "pip3"
+	else:  # GNU/Linux, Termux, FreeBSD, etc
 		confDir = join(homeDir, ".pyglossary")
 		cacheDir = join(homeDir, ".cache", "pyglossary")
+		if "/com.termux/" in homeDir:
+			pip = "pip3"
+		else:
+			pip = "sudo pip3"
 elif os.sep == "\\":  # Operating system is Windows
 	homeDir = join(os.getenv("HOMEDRIVE"), os.getenv("HOMEPATH"))
 	user = os.getenv("USERNAME")
 	tmpDir = os.getenv("TEMP")
 	confDir = join(os.getenv("APPDATA"), "PyGlossary")
 	cacheDir = join(confDir, "Cache")  # FIXME: right directory?
+	pip = "pip3"
 else:
 	raise RuntimeError(
 		f"Unknown path seperator(os.sep=={os.sep!r})"

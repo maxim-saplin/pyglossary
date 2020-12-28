@@ -2,10 +2,9 @@
 
 import re
 import logging
-from typing import Tuple, List, Dict, Optional, Any
 
 
-log = logging.getLogger("root")
+log = logging.getLogger("pyglossary")
 
 
 class Option(object):
@@ -13,21 +12,65 @@ class Option(object):
 		self,
 		typ: str,
 		customValue: bool = False,
-		values: Optional[List[str]] = None,
+		values: "Optional[List[str]]" = None,
+		allowNone: bool = False,
 		comment: str = "",
+		multiline: bool = False,
 		disabled: bool = False,
-	):
+		cmd: bool = False,
+		cmdFlag: str = "",
+		falseComment: str = "",
+	) -> None:
 		if values is None:
 			# otherwise there would not be any valid value
 			customValue = True
 		self.typ = typ
 		self.values = values
+		self.allowNone = allowNone
 		self.customValue = customValue
 		self.comment = comment
+		self.multiline = multiline
 		self.disabled = disabled
+		self.cmd = cmd
+		self.cmdFlag = cmdFlag
+		self.falseComment = falseComment
 
-	def evaluate(self, raw: str) -> Tuple[Any, bool]:
+	@property
+	def typeDesc(self):
+		return self.typ
+
+	@property
+	def longComment(self):
+		comment = self.typeDesc
+		if self.comment:
+			if comment:
+				comment += ", "
+			comment += self.comment
+		return comment
+
+	def toDict(self):
+		data = {
+			"class": self.__class__.__name__,
+			"type": self.typ,
+			"customValue": self.customValue,
+		}
+		if self.values:
+			data["values"] = self.values
+		if self.comment:
+			data["comment"] = self.comment
+		if self.disabled:
+			data["disabled"] = True
+		if self.cmd:
+			data["cmd"] = True
+			data["cmdFlag"] = self.cmdFlag
+		if self.falseComment:
+			data["falseComment"] = self.falseComment
+		return data
+
+	def evaluate(self, raw: str) -> "Tuple[Any, bool]":
 		"returns (value, isValid)"
+		if raw == "None":
+			return None, True
 		return raw, True
 
 	def validate(self, value):
@@ -40,7 +83,7 @@ class Option(object):
 				return False
 			return value in self.values
 		if value is None:
-			return self.typ in ("dict", "list")
+			return self.allowNone
 		valueType = type(value).__name__
 		return self.typ == valueType
 
@@ -53,21 +96,35 @@ class Option(object):
 			return False
 		return True
 
-	def groupValues(self) -> Optional[Dict[str, Any]]:
+	def groupValues(self) -> "Optional[Dict[str, Any]]":
 		return None
 
 
 class BoolOption(Option):
-	def __init__(self, **kwargs):
+	def __init__(self, allowNone=False, **kwargs):
+		values = [False, True]
+		if allowNone:
+			values.append(None)
 		Option.__init__(
 			self,
 			"bool",
 			customValue=False,
-			values=[False, True],
+			values=values,
+			allowNone=allowNone,
 			**kwargs,
 		)
 
-	def evaluate(self, raw: str) -> Tuple[Optional[bool], bool]:
+	def toDict(self):
+		data = Option.toDict(self)
+		del data["customValue"]
+		del data["values"]
+		return data
+
+	def evaluate(self, raw: "Union[str, bool]") -> "Tuple[Optional[bool], bool]":
+		if raw is None or raw.lower() == "none":
+			return None, True
+		if isinstance(raw, bool):
+			return raw, True
 		if raw.lower() in ("yes", "true", "1"):
 			return True, True
 		if raw.lower() in ("no", "false", "0"):
@@ -90,7 +147,7 @@ class StrOption(Option):
 			return value in self.values
 		return type(value).__name__ == "str"
 
-	def groupValues(self) -> Optional[Dict[str, Any]]:
+	def groupValues(self) -> "Optional[Dict[str, Any]]":
 		return None
 
 
@@ -98,21 +155,53 @@ class IntOption(Option):
 	def __init__(self, **kwargs):
 		Option.__init__(self, "int", **kwargs)
 
-	def evaluate(self, raw: str) -> Tuple[Optional[int], bool]:
+	def evaluate(self, raw: "Union[str, int]") -> "Tuple[Optional[int], bool]":
 		"returns (value, isValid)"
 		try:
 			value = int(raw)
 		except ValueError:
 			return None, False
-		else:
-			return value, True
+		return value, True
+
+
+class FileSizeOption(IntOption):
+	factors = {
+		"k": 1024,
+		"K": 1024,
+		"m": 1048576,
+		"M": 1048576,
+		"g": 1073741824,
+		"G": 1073741824,
+	}
+
+	@property
+	def typeDesc(self):
+		return ""
+
+	def evaluate(self, raw: "Union[str, int]") -> "Tuple[Optional[int], bool]":
+		if not raw:
+			return 0
+		factor = 1
+		if raw[-1] in self.factors:
+			factor = self.factors[raw[-1]]
+			raw = raw[:-1]
+		try:
+			value = float(raw)
+		except ValueError:
+			return None, False
+		if value < 0:
+			return None, False
+		return int(value * factor), True
 
 
 class FloatOption(Option):
 	def __init__(self, **kwargs):
 		Option.__init__(self, "float", **kwargs)
 
-	def evaluate(self, raw: float) -> Tuple[Optional[float], bool]:
+	def evaluate(
+		self,
+		raw: "Union[str, float, int]",
+	) -> "Tuple[Optional[float], bool]":
 		"returns (value, isValid)"
 		try:
 			value = float(raw)
@@ -128,11 +217,15 @@ class DictOption(Option):
 			self,
 			"dict",
 			customValue=True,
+			allowNone=True,
+			multiline=True,
 			**kwargs,
 		)
 
-	def evaluate(self, raw: str) -> Tuple[Optional[Dict], bool]:
+	def evaluate(self, raw: "Union[str, dict]") -> "Tuple[Optional[Dict], bool]":
 		import ast
+		if isinstance(raw, dict):
+			return raw, True
 		if raw == "":
 			return None, True  # valid
 		try:
@@ -150,10 +243,12 @@ class ListOption(Option):
 			self,
 			"list",
 			customValue=True,
+			allowNone=True,
+			multiline=True,
 			**kwargs,
 		)
 
-	def evaluate(self, raw: str) -> Tuple[Optional[List], bool]:
+	def evaluate(self, raw: str) -> "Tuple[Optional[List], bool]":
 		import ast
 		if raw == "":
 			return None, True  # valid
@@ -168,6 +263,7 @@ class ListOption(Option):
 
 class EncodingOption(Option):
 	re_category = re.compile("^[a-z]+")
+
 	def __init__(self, customValue=True, values=None, **kwargs):
 		if values is None:
 			values = [
@@ -206,7 +302,12 @@ class EncodingOption(Option):
 			**kwargs
 		)
 
-	def groupValues(self) -> Optional[Dict[str, Any]]:
+	def toDict(self):
+		data = Option.toDict(self)
+		del data["values"]
+		return data
+
+	def groupValues(self) -> "Optional[Dict[str, Any]]":
 		from collections import OrderedDict
 		groups = OrderedDict()  # type: Dict[str, List[str]]
 		others = []  # type: List[str]
@@ -240,6 +341,7 @@ class NewlineOption(Option):
 			"str",
 			customValue=customValue,
 			values=values,
+			multiline=True,
 			**kwargs
 		)
 

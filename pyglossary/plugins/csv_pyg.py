@@ -19,12 +19,11 @@
 
 from formats_common import *
 import csv
-from pyglossary.file_utils import fileCountLines
 
 
 enable = True
 format = "Csv"
-description = "CSV"
+description = "CSV (.csv)"
 extensions = (".csv",)
 singleFile = True
 tools = [
@@ -44,12 +43,25 @@ tools = [
 optionsProp = {
 	"encoding": EncodingOption(),
 	"resources": BoolOption(),
+	"delimiter": Option(
+		"str",
+		customValue=True,
+		values=[",", ";", "@"],
+	),
+	"add_defi_format": BoolOption(),
+	"writeInfo": BoolOption(),
+	"word_title": BoolOption(
+		comment="add headwords title to begining of definition",
+	),
 }
-depends = {}
-supportsAlternates = True
 
 
 class Reader(object):
+	compressions = stdCompressions
+
+	_encoding: str = "utf-8"
+	_delimiter: str = ","
+
 	def __init__(self, glos: GlossaryType):
 		self._glos = glos
 		self.clear()
@@ -63,13 +75,23 @@ class Reader(object):
 		self._csvReader = None
 		self._resDir = ""
 		self._resFileNames = []
+		self._bufferRow = None
 
-	def open(self, filename: str, encoding: str = "utf-8") -> None:
+	def open(
+		self,
+		filename: str,
+	) -> None:
+		from pyglossary.text_reader import TextFilePosWrapper
 		self._filename = filename
-		self._file = open(filename, "r", encoding=encoding)
+		cfile = compressionOpen(filename, mode="rt", encoding=self._encoding)
+		cfile.seek(0, 2)
+		self._fileSize = cfile.tell()
+		cfile.seek(0)
+		self._file = TextFilePosWrapper(cfile, self._encoding)
 		self._csvReader = csv.reader(
 			self._file,
 			dialect="excel",
+			delimiter=self._delimiter,
 		)
 		self._resDir = filename + "_res"
 		if isdir(self._resDir):
@@ -77,29 +99,47 @@ class Reader(object):
 		else:
 			self._resDir = ""
 			self._resFileNames = []
+		for row in self._csvReader:
+			if not row:
+				continue
+			if not row[0].startswith("#"):
+				self._bufferRow = row
+				break
+			if len(row) < 2:
+				log.error(f"invalid row: {row}")
+				continue
+			self._glos.setInfo(row[0].lstrip("#"), row[1])
 
 	def close(self) -> None:
 		if self._file:
 			try:
 				self._file.close()
-			except:
+			except Exception:
 				log.exception("error while closing csv file")
 		self.clear()
 
 	def __len__(self) -> int:
+		from pyglossary.file_utils import fileCountLines
 		if self._wordCount is None:
+			if hasattr(self._file, "compression"):
+				return 0
 			log.debug("Try not to use len(reader) as it takes extra time")
 			self._wordCount = fileCountLines(self._filename) - \
 				self._leadingLinesCount
 		return self._wordCount + len(self._resFileNames)
 
-	def __iter__(self) -> Iterator[BaseEntry]:
+	def _iterRows(self):
+		if self._bufferRow:
+			yield self._bufferRow
+		for row in self._csvReader:
+			yield row
+
+	def __iter__(self) -> "Iterator[BaseEntry]":
 		if not self._csvReader:
-			log.error(f"{self} is not open, can not iterate")
-			raise StopIteration
+			raise RuntimeError("iterating over a reader while it's not open")
 
 		wordCount = 0
-		for row in self._csvReader:
+		for row in self._iterRows():
 			wordCount += 1
 			if not row:
 				yield None  # update progressbar
@@ -117,7 +157,11 @@ class Reader(object):
 				pass
 			else:
 				word = [word] + alts
-			yield self._glos.newEntry(word, defi)
+			yield self._glos.newEntry(
+				word,
+				defi,
+				byteProgress=(self._file.tell(), self._fileSize),
+			)
 		self._wordCount = wordCount
 
 		resDir = self._resDir
@@ -129,36 +173,77 @@ class Reader(object):
 				)
 
 
-def write(glos: GlossaryType, filename: str, encoding: str = "utf-8", resources: bool = True) -> None:
-	resDir = filename + "_res"
-	if not isdir(resDir):
-		os.mkdir(resDir)
-	with open(filename, "w", encoding=encoding) as csvfile:
-		writer = csv.writer(
-			csvfile,
+class Writer(object):
+	compressions = stdCompressions
+
+	_encoding: str = "utf-8"
+	_resources: bool = True
+	_delimiter: str = ","
+	_add_defi_format: bool = False
+	_writeInfo: bool = True
+	_word_title: bool = False
+
+	def __init__(self, glos: GlossaryType):
+		self._glos = glos
+
+	def open(self, filename: str):
+		self._filename = filename
+		self._file = compressionOpen(filename, mode="wt", encoding=self._encoding)
+		self._resDir = resDir = filename + "_res"
+		self._csvWriter = csv.writer(
+			self._file,
 			dialect="excel",
 			quoting=csv.QUOTE_ALL,  # FIXME
+			delimiter=self._delimiter,
 		)
-		for entry in glos:
+		if not isdir(resDir):
+			os.mkdir(resDir)
+		if self._writeInfo:
+			for key, value in self._glos.iterInfo():
+				self._csvWriter.writerow([f"#{key}", value])
+
+	def finish(self):
+		self._filename = None
+		if self._file:
+			self._file.close()
+			self._file = None
+		if not os.listdir(self._resDir):
+			os.rmdir(self._resDir)
+
+	def write(self) -> "Generator[None, BaseEntry, None]":
+		encoding = self._encoding
+		resources = self._resources
+		add_defi_format = self._add_defi_format
+		glos = self._glos
+		resDir = self._resDir
+		writer = self._csvWriter
+		word_title = self._word_title
+		while True:
+			entry = yield
+			if entry is None:
+				break
 			if entry.isData():
 				if resources:
 					entry.save(resDir)
 				continue
 
-			words = entry.words
+			words = entry.l_word
 			if not words:
 				continue
 			word, alts = words[0], words[1:]
 			defi = entry.defi
 
+			if word_title:
+				defi = glos.wordTitleStr(words[0]) + defi
+
 			row = [
 				word,
 				defi,
 			]
+			if add_defi_format:
+				entry.detectDefiFormat()
+				row.append(entry.defiFormat)
 			if alts:
 				row.append(",".join(alts))
 
 			writer.writerow(row)
-
-	if not os.listdir(resDir):
-		os.rmdir(resDir)

@@ -28,13 +28,13 @@ from pyglossary.text_utils import (
 
 enable = True
 format = "Edlin"
-description = "Editable Linked List of Entries"
+# Editable Linked List of Entries
+description = "EDLIN"
 extensions = (".edlin",)
 optionsProp = {
 	"encoding": EncodingOption(),
 	"havePrevLink": BoolOption(),
 }
-depends = {}
 
 
 def makeDir(direc: str) -> None:
@@ -43,6 +43,8 @@ def makeDir(direc: str) -> None:
 
 
 class Reader(object):
+	_encoding: str = "utf-8"
+
 	def __init__(self, glos: GlossaryType):
 		self._glos = glos
 		self._clear()
@@ -52,14 +54,13 @@ class Reader(object):
 
 	def _clear(self) -> None:
 		self._filename = ""
-		self._encoding = "utf-8"
 		self._havePrevLink = True
 		self._wordCount = None
 		self._rootPath = None
 		self._resDir = ""
 		self._resFileNames = []
 
-	def open(self, filename: str, encoding: str = "utf-8") -> None:
+	def open(self, filename: str) -> None:
 		from pyglossary.json_utils import jsonToOrderedData
 		if isdir(filename):
 			infoFname = join(filename, "info.json")
@@ -71,16 +72,14 @@ class Reader(object):
 				f"error while opening {filename!r}: no such file or directory"
 			)
 		self._filename = filename
-		self._encoding = encoding
 
-		with open(infoFname, "r", encoding=encoding) as infoFp:
-			infoJson = infoFp.read()
-			info = jsonToOrderedData(infoJson)
-			self._wordCount = info.pop("wordCount")
-			self._havePrevLink = info.pop("havePrevLink")
-			self._rootPath = info.pop("root")
-			for key, value in info.items():
-				self._glos.setInfo(key, value)
+		with open(infoFname, "r", encoding=self._encoding) as infoFp:
+			info = jsonToOrderedData(infoFp.read())
+		self._wordCount = info.pop("wordCount")
+		self._havePrevLink = info.pop("havePrevLink")
+		self._rootPath = info.pop("root")
+		for key, value in info.items():
+			self._glos.setInfo(key, value)
 
 		self._resDir = join(filename, "res")
 		if isdir(self._resDir):
@@ -95,10 +94,9 @@ class Reader(object):
 			return 0
 		return self._wordCount + len(self._resFileNames)
 
-	def __iter__(self) -> Iterator[BaseEntry]:
+	def __iter__(self) -> "Iterator[BaseEntry]":
 		if not self._rootPath:
-			log.error("iterating over a reader which is not open")
-			raise StopIteration
+			raise RuntimeError("iterating over a reader while it's not open")
 
 		wordCount = 0
 		nextPath = self._rootPath
@@ -114,7 +112,7 @@ class Reader(object):
 			) as fromFile:
 				header = fromFile.readline().rstrip()
 				if self._havePrevLink:
-					self._prevPath, nextPath = header.split(" ")
+					_prevPath, nextPath = header.split(" ")
 				else:
 					nextPath = header
 				word = fromFile.readline()
@@ -132,12 +130,12 @@ class Reader(object):
 				word = word.rstrip()
 				defi = defi.rstrip()
 
-			if self._glos.getPref("enable_alts", True):
+			if self._glos.getConfig("enable_alts", True):
 				word = splitByBarUnescapeNTB(word)
 				if len(word) == 1:
 					word = word[0]
 			else:
-				word = unescapeNTB(word, bar=True)
+				word = unescapeNTB(word, bar=False)
 
 			# defi = unescapeNTB(defi)
 			yield self._glos.newEntry(word, defi)
@@ -159,15 +157,25 @@ class Reader(object):
 
 
 class Writer(object):
+	_encoding: str = "utf-8"
+	_havePrevLink: bool = True
+
 	def __init__(self, glos: GlossaryType):
 		self._glos = glos
 		self._clear()
 
-	def close(self) -> None:
+	def finish(self) -> None:
 		self._clear()
 
+	def open(self, filename: str):
+		self._filename = filename
+		self._resDir = join(filename, "res")
+		os.makedirs(filename)
+		os.mkdir(self._resDir)
+
 	def _clear(self) -> None:
-		self._filename = ""
+		self._filename = None
+		self._resDir = None
 		self._encoding = "utf-8"
 		self._hashSet = set()
 		# self._wordCount = None
@@ -182,7 +190,7 @@ class Writer(object):
 		different hash string
 		"""
 		from hashlib import sha1
-		_hash = sha1(entry.word.encode("utf-8")).hexdigest()[:8]
+		_hash = sha1(entry.s_word.encode("utf-8")).hexdigest()[:8]
 		if _hash not in self._hashSet:
 			self._hashSet.add(_hash)
 			return _hash
@@ -210,45 +218,32 @@ class Writer(object):
 				header = nextPath
 			toFile.write("\n".join([
 				header,
-				thisEntry.word,
+				escapeNTB(thisEntry.s_word, bar=False),
 				thisEntry.defi,
 			]))
 
-	def _iterNonDataEntries(self) -> Iterator[BaseEntry]:
-		for entry in self._glos:
-			if entry.isData():
-				entry.save(self._resDir)
-			else:
-				yield entry
 
-	def write(
-		self,
-		filename: str,
-		encoding: str = "utf-8",
-		havePrevLink: bool = True
-	) -> None:
+	def write(self) -> "Generator[None, BaseEntry, None]":
 		from collections import OrderedDict as odict
 		from pyglossary.json_utils import dataToPrettyJson
 
-		if exists(filename):
-			raise ValueError(f"directory {filename!r} already exists")
-		self._filename = filename
-		self._encoding = encoding
-		self._havePrevLink = havePrevLink
-		self._resDir = join(filename, "res")
-		os.makedirs(filename)
-		os.mkdir(self._resDir)
+		filename = self._filename
 
-		glosIter = iter(self._iterNonDataEntries())
-		try:
-			thisEntry = next(glosIter)
-		except StopIteration:
+		thisEntry = yield
+		if thisEntry is None:
 			raise ValueError("glossary is empty")
 
 		count = 1
 		rootHash = thisHash = self.getEntryHash(thisEntry)
 		prevHash = None
-		for nextEntry in glosIter:
+
+		while True:
+			nextEntry = yield
+			if nextEntry is None:
+				break
+			if nextEntry.isData():
+				nextEntry.save(self._resDir)
+				continue
 			nextHash = self.getEntryHash(nextEntry)
 			self.saveEntry(thisEntry, thisHash, prevHash, nextHash)
 			thisEntry = nextEntry

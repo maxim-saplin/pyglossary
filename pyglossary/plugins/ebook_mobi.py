@@ -44,75 +44,77 @@ optionsProp = {
 	"group_by_prefix_length": IntOption(),
 	# "group_by_prefix_merge_min_size": IntOption(),
 	# "group_by_prefix_merge_across_first": BoolOption(),
-	"kindlegen_path": StrOption(), # specific to mobi
+	"kindlegen_path": StrOption(),  # specific to mobi
+
+	"compress": BoolOption(disabled=True),
+	"keep": BoolOption(disabled=True),
+	"include_index_page": BoolOption(disabled=True),
+	"apply_css": StrOption(disabled=True),
+	"cover_path": StrOption(disabled=True),
 }
 
 
-
 class Writer(EbookWriter):
-	ebook_format = format
+	_compress: bool = False
+	_keep: bool = False
+	_kindlegen_path: str = ""
 
 	CSS_CONTENTS = """"@charset "UTF-8";"""
 	GROUP_XHTML_TEMPLATE = """<?xml version="1.0" encoding="utf-8" standalone="no"?>
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml">
- <head>
-  <title>{title}</title>
-  <link rel="stylesheet" type="text/css" href="style.css" />
- </head>
- <body id="groupPage" class="groupPage">
-  <h1 class="groupTitle">{group_title}</h1>
-  <div class="groupNavigation">
-   <a href="{previous_link}">[ Previous ]</a>
+	<head>
+		<title>{title}</title>
+		<link rel="stylesheet" type="text/css" href="style.css" />
+	</head>
+	<body id="groupPage" class="groupPage">
+		<h1 class="groupTitle">{group_title}</h1>
+		<div class="groupNavigation">
+			<a href="{previous_link}">[ Previous ]</a>
 {index_link}
-   <a href="{next_link}">[ Next ]</a>
-  </div>
+			<a href="{next_link}">[ Next ]</a>
+		</div>
 {group_contents}
- </body>
+	</body>
 </html>"""
 
-	GROUP_XHTML_INDEX_LINK = """   <a href="index.xhtml">[ Index ]</a>"""
+	GROUP_XHTML_INDEX_LINK = """\t\t<a href="index.xhtml">[ Index ]</a>"""
 
-	GROUP_XHTML_WORD_TEMPLATE = """   <span class="groupHeadword"><idx:entry><idx:orth>{headword}</idx:orth></idx:entry></span>"""
-
-	GROUP_XHTML_WORD_JOINER = " &#8226;\n"
-
-	GROUP_XHTML_WORD_DEFINITION_TEMPLATE = """  <div class="groupEntry">
-   <idx:entry>
-	<h2 class="groupHeadword"><idx:orth>{headword}</idx:orth></h2>
-	<p class="groupDefinition">{definition}</p>
-   </idx:entry>
-  </div>"""
-
+	GROUP_XHTML_WORD_DEFINITION_TEMPLATE = """\t<div class="groupEntry">
+		<idx:entry>
+			<h2 class="groupHeadword"><idx:orth>{headword}</idx:orth></h2>
+			<p class="groupDefinition">{definition}</p>
+		</idx:entry>
+	</div>"""
 
 	OPF_TEMPLATE = """<?xml version="1.0" encoding="utf-8"?>
 <package unique-identifier="uid">
- <metadata>
-  <dc-metadata xmlns:dc="http://purl.org/metadata/dublin_core" xmlns:oebpackage="http://openebook.org/namespaces/oeb-package/1.0/">
-   <dc:Title>{title}</dc:Title>
-   <dc:Language>{sourceLang}</dc:Language>
-   <dc:Identifier id="uid">{identifier}</dc:Identifier>
-   <dc:Creator>{creator}</dc:Creator>
-   <dc:Rights>{copyright}</dc:Rights>
-   <dc:Subject BASICCode="REF008000">Dictionaries</dc:Subject>
-  </dc-metadata>
-  <x-metadata>
-   <output encoding="utf-8"></output>
-   <DictionaryInLanguage>{sourceLang}</DictionaryInLanguage>
-   <DictionaryOutLanguage>{targetLang}</DictionaryOutLanguage>
-   <EmbeddedCover>{cover}</EmbeddedCover>
-  </x-metadata>
- </metadata>
- <manifest>
+	<metadata>
+		<dc-metadata xmlns:dc="http://purl.org/metadata/dublin_core"
+			xmlns:oebpackage="http://openebook.org/namespaces/oeb-package/1.0/">
+			<dc:Title>{title}</dc:Title>
+			<dc:Language>{sourceLang}</dc:Language>
+			<dc:Identifier id="uid">{identifier}</dc:Identifier>
+			<dc:Creator>{creator}</dc:Creator>
+			<dc:Rights>{copyright}</dc:Rights>
+			<dc:Subject BASICCode="REF008000">Dictionaries</dc:Subject>
+		</dc-metadata>
+		<x-metadata>
+			<output encoding="utf-8"></output>
+			<DictionaryInLanguage>{sourceLang}</DictionaryInLanguage>
+			<DictionaryOutLanguage>{targetLang}</DictionaryOutLanguage>
+			<EmbeddedCover>{cover}</EmbeddedCover>
+		</x-metadata>
+	</metadata>
+	<manifest>
 {manifest}
- </manifest>
- <spine>
+	</manifest>
+	<spine>
 {spine}
- </spine>
- <tours></tours>
- <guide></guide>
+	</spine>
+	<tours></tours>
+	<guide></guide>
 </package>"""
-
 
 	def __init__(self, glos, **kwargs):
 		import uuid
@@ -120,25 +122,15 @@ class Writer(EbookWriter):
 			self,
 			glos,
 		)
-		self._glos = glos
 		glos.setInfo("uuid", str(uuid.uuid4()).replace("-", ""))
 
-	def write(
-		self,
-		filename,
-		group_by_prefix_length=2,
-		kindlegen_path="",
-	):
+	def write(self):
 		import subprocess
 
-		EbookWriter.write(
-			self,
-			filename,
-			compress=False,
-			keep=False,
-			group_by_prefix_length=group_by_prefix_length,
-		)
-		self.close()
+		filename = self._filename
+		kindlegen_path = self._kindlegen_path
+
+		yield from EbookWriter.write(self)
 
 		# download kindlegen from this page:
 		# https://www.amazon.com/gp/feature.html?ie=UTF8&docId=1000765211

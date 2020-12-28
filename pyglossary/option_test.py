@@ -1,12 +1,18 @@
+#!/usr/bin/python3
+
+import sys
+from os.path import join, dirname, abspath
 import unittest
 import random
-from typing import Optional, Tuple, List, Any
+
+rootDir = dirname(dirname(abspath(__file__)))
+sys.path.insert(0, rootDir)
 
 from pyglossary.option import *
 
 
 class TestOptionValidateBoolNumber(unittest.TestCase):
-	def caseOK(self, cls, raw: str, value: Optional[bool]):
+	def caseOK(self, cls, raw: str, value: "Optional[bool]"):
 		opt = cls()
 		valueActual, ok = opt.evaluate(raw)
 		self.assertTrue(ok, "evaluate failed")
@@ -14,7 +20,7 @@ class TestOptionValidateBoolNumber(unittest.TestCase):
 		ok2 = opt.validate(valueActual)
 		self.assertEqual(ok2, True, "validate failed")
 
-	def caseFailed(self, cls, raw: str, value: Optional[bool]):
+	def caseFailed(self, cls, raw: str, value: "Optional[bool]"):
 		opt = cls()
 		valueActual, ok = opt.evaluate(raw)
 		self.assertFalse(ok)
@@ -58,6 +64,19 @@ class TestOptionValidateBoolNumber(unittest.TestCase):
 		self.caseFailed(IntOption, "12f", None)
 		self.caseFailed(IntOption, "fff", None)
 
+	def test_file_size_ok(self):
+		self.caseOK(FileSizeOption, "0", 0)
+		self.caseOK(FileSizeOption, "1", 1)
+		self.caseOK(FileSizeOption, "1234", 1234)
+		self.caseOK(FileSizeOption, "123k", 123 * 1024)
+		self.caseOK(FileSizeOption, "123m", 123 * 1024 ** 2)
+		self.caseOK(FileSizeOption, "1.7g", int(1.7 * 1024 ** 3))
+
+	def test_file_size_failed(self):
+		self.caseFailed(FileSizeOption, "-1", None)
+		self.caseFailed(FileSizeOption, "123kg", None)
+		self.caseFailed(FileSizeOption, "123k.1", None)
+
 	def test_float_ok(self):
 		self.caseOK(FloatOption, "0", 0.0)
 		self.caseOK(FloatOption, "1", 1.0)
@@ -73,7 +92,7 @@ class TestOptionValidateBoolNumber(unittest.TestCase):
 
 
 class TestOptionValidateStr(unittest.TestCase):
-	def newTester(self, customValue: bool, values: List[str]):
+	def newTester(self, customValue: bool, values: "List[str]"):
 		def test(raw: str, valid: bool):
 			opt = StrOption(customValue=customValue, values=values)
 			valueActual, evalOkActual = opt.evaluate(raw)
@@ -101,7 +120,7 @@ class TestOptionValidateStr(unittest.TestCase):
 
 
 class TestOptionValidateDict(unittest.TestCase):
-	def caseOK(self, raw: str, value: Optional[Dict]):
+	def caseOK(self, raw: str, value: "Optional[Dict]"):
 		opt = DictOption()
 		valueActual, ok = opt.evaluate(raw)
 		self.assertTrue(ok, "evaluate failed")
@@ -138,7 +157,7 @@ class TestOptionValidateDict(unittest.TestCase):
 
 
 class TestOptionValidateList(unittest.TestCase):
-	def caseOK(self, raw: str, value: Optional[Dict]):
+	def caseOK(self, raw: str, value: "Optional[Dict]"):
 		opt = ListOption()
 		valueActual, ok = opt.evaluate(raw)
 		self.assertTrue(ok, "evaluate failed")

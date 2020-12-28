@@ -6,21 +6,12 @@ except ImportError:
 
 from collections import OrderedDict
 
-from typing import (
-	Union,
-	Dict,
-	List,
-	AnyStr,
-	Optional,
-)
-from types import ModuleType
-
-JsonEncodable = Union[Dict, List]
+JsonEncodable = "Union[Dict, List]"
 # OrderedDict is also subclass of Dict, issubclass(OrderedDict, Dict) == True
 
 
 def dataToPrettyJson(
-	data: JsonEncodable,
+	data: "JsonEncodable",
 	ensure_ascii: bool = False,
 	sort_keys: bool = False,
 ):
@@ -32,24 +23,11 @@ def dataToPrettyJson(
 	)
 
 
-def dataToCompactJson(
-	data: JsonEncodable,
-	ensure_ascii: bool = False,
-	sort_keys: bool = False,
-) -> str:
-	return json.dumps(
-		data,
-		sort_keys=sort_keys,
-		separators=(',', ':'),
-		ensure_ascii=ensure_ascii,
-	)
-
-
-def jsonToData(st: AnyStr) -> JsonEncodable:
+def jsonToData(st: "AnyStr") -> "JsonEncodable":
 	return json.loads(st)
 
 
-def jsonToOrderedData(text: str) -> OrderedDict:
+def jsonToOrderedData(text: str) -> "OrderedDict":
 	return json.JSONDecoder(
 		object_pairs_hook=OrderedDict,
 	).decode(text)

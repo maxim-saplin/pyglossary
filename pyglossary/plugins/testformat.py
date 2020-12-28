@@ -10,8 +10,6 @@ extensions = (".test", ".tst")
 # key is option/argument name, value is instance of Option
 optionsProp = {}
 
-depends = {}
-
 
 class Reader(object):
 	def __init__(self, glos: GlossaryType) -> None:
@@ -62,18 +60,33 @@ class Reader(object):
 			yield glos.newEntry(word, defi)
 
 
-def write(glos: GlossaryType, filename: str) -> bool:
-	log.info(f"writing to format {format} using plugin")
-	for entry in glos:
-		word = entry.word
-		defi = entry.defi
-		# here write word and defi to the output file (depending on
-		# your format)
-	# here read info from Glossaey object
-	name = glos.getInfo("name")
-	desc = glos.getInfo("description")
-	author = glos.getAuthor()
-	copyright = glos.getInfo("copyright")
-	# if an info key doesn't exist, getInfo returns empty string
-	# now write info to the output file (depending on your output format)
-	return True  # writing output file was succesfull
+class Writer(object):
+	def __init__(self, glos: GlossaryType) -> None:
+		self._glos = glos
+		self._filename = None
+
+	def open(self, filename: str) -> None:
+		self._filename = filename
+
+	def write(self) -> "Generator[None, BaseEntry, None]":
+		glos = self._glos
+		filename = self._filename
+		log.info(f"writing to format {format} using plugin")
+		while True:
+			entry = yield
+			if entry is None:
+				break
+			word = entry.s_word
+			defi = entry.defi
+			# here write word and defi to the output file (depending on
+			# your format)
+		# here read info from Glossaey object
+		name = glos.getInfo("name")
+		desc = glos.getInfo("description")
+		author = glos.getAuthor()
+		copyright = glos.getInfo("copyright")
+		# if an info key doesn't exist, getInfo returns empty string
+		# now write info to the output file (depending on your output format)
+
+	def finish(self):
+		self._filename = None

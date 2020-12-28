@@ -12,7 +12,6 @@ optionsProp = {
 	"dictzip": BoolOption(),
 	"install": BoolOption(),
 }
-depends = {}
 sortOnWrite = DEFAULT_NO
 
 # https://en.wikipedia.org/wiki/DICT#DICT_file_format
@@ -35,6 +34,14 @@ tools = [
 		"platforms": ["linux"],
 		"license": "GPL",
 	},
+	{
+		"name": "Ding",
+		"desc": "Graphical dictionary lookup program for Unix (Tk)",
+		"web": "https://www-user.tu-chemnitz.de/~fri/ding/",
+		"platforms": ["linux"],
+		"license": "GPL",
+		"copyright": "Copyright (c) 1999 - 2016 Frank Richter",
+	},
 ]
 
 
@@ -45,6 +52,10 @@ def installToDictd(filename: str, dictzip: bool, title: str = "") -> None:
 	import shutil, subprocess
 	targetDir = "/usr/share/dictd/"
 	if filename.startswith(targetDir):
+		return
+
+	if not isdir(targetDir):
+		log.warning(f"Directory {targetDir!r} does not exist, skipping install")
 		return
 
 	log.info(f"Installing {filename!r} to DICTD server directory: {targetDir}")
@@ -61,10 +72,11 @@ def installToDictd(filename: str, dictzip: bool, title: str = "") -> None:
 		shutil.copy(filename + ".index", targetDir)
 		shutil.copy(filename + dictExt, targetDir)
 
+	# update /var/lib/dictd/db.list
 	if subprocess.call(["/usr/sbin/dictdconfig", "-w"]) != 0:
 		log.error(
-			"failed to update .db file, try manually runing: "
-			"sudo /usr/sbin/dictdconfig -w"
+			"failed to update /var/lib/dictd/db.list file"
+			", try manually runing: sudo /usr/sbin/dictdconfig -w"
 		)
 
 	log.info("don't forget to restart dictd server")
@@ -95,35 +107,57 @@ class Reader(object):
 			return 0
 		return len(self._dictdb.indexentries)
 
-	def __iter__(self) -> Iterator[BaseEntry]:
+	def __iter__(self) -> "Iterator[BaseEntry]":
 		if self._dictdb is None:
-			log.error("reader is not open, can not iterate")
-			raise StopIteration
+			raise RuntimeError("iterating over a reader while it's not open")
 		dictdb = self._dictdb
 		for word in dictdb.getdeflist():
-			b_defis = dictdb.getdef(word)
-			defis = [defi.decode("utf_8") for defi in b_defis]
-			yield self._glos.newEntry(word, defis)
+			b_defi = b"\n<hr>\n".join(dictdb.getdef(word))
+			try:
+				defi = b_defi.decode("utf_8")
+			except Exception as e:
+				log.error(f"b_defi = {b_defi}")
+				raise e
+			yield self._glos.newEntry(word, defi)
 
 
-def write(
-	glos: GlossaryType,
-	filename: str,
-	dictzip: bool = False,
-	install: bool = True,
-) -> None:
-	from pyglossary.text_utils import runDictzip
-	(filename_nox, ext) = splitext(filename)
-	if ext.lower() == ".index":
-		filename = filename_nox
-	dictdb = DictDB(filename, "write", 1)
-	for entry in glos:
-		if entry.isData():
-			# does dictd support resources? and how? FIXME
-			continue
-		dictdb.addentry(entry.b_defi, entry.words)
-	dictdb.finish(dosort=1)
-	if dictzip:
-		runDictzip(filename)
-	if install:
-		installToDictd(filename, dictzip, glos.getInfo("name").replace(" ", "_"))
+class Writer(object):
+	_dictzip: bool = False
+	_install: bool = True
+
+	def __init__(self, glos: GlossaryType) -> None:
+		self._glos = glos
+		self._filename = None
+		self._dictdb = None
+
+	def finish(self):
+		from pyglossary.os_utils import runDictzip
+		self._dictdb.finish(dosort=1)
+		if self._dictzip:
+			runDictzip(f"{self._filename}.dict")
+		if self._install:
+			installToDictd(
+				self._filename,
+				self._dictzip,
+				self._glos.getInfo("name").replace(" ", "_"),
+			)
+		self._filename = None
+
+	def open(self, filename: str):
+		filename_nox, ext = splitext(filename)
+		if ext.lower() == ".index":
+			filename = filename_nox
+		self._dictdb = DictDB(filename, "write", 1)
+		self._filename = filename
+
+	def write(self) -> "Generator[None, BaseEntry, None]":
+		dictdb = self._dictdb
+		while True:
+			entry = yield
+			if entry is None:
+				break
+			if entry.isData():
+				# does dictd support resources? and how? FIXME
+				continue
+			dictdb.addentry(entry.b_defi, entry.l_word)
+

@@ -20,32 +20,27 @@ import string
 import sys
 import os
 import re
+import struct
+import binascii
 import logging
-
-from typing import (
-	AnyStr,
-	List,
-	Union,
-	Optional,
-)
 
 from . import core
 
-log = logging.getLogger("root")
+log = logging.getLogger("pyglossary")
 
 startRed = "\x1b[31m"
 endFormat = "\x1b[0;0;0m"  # len=8
 
 
-def toBytes(s: AnyStr) -> bytes:
+def toBytes(s: "AnyStr") -> bytes:
 	return bytes(s, "utf-8") if isinstance(s, str) else bytes(s)
 
 
-def toStr(s: AnyStr) -> str:
+def toStr(s: "AnyStr") -> str:
 	return str(s, "utf-8") if isinstance(s, bytes) else str(s)
 
 
-def fixUtf8(st: AnyStr) -> str:
+def fixUtf8(st: "AnyStr") -> str:
 	return toBytes(st).replace(b"\x00", b"").decode("utf-8", "replace")
 
 
@@ -55,12 +50,23 @@ pattern_bar_us = re.compile(r"((?<!\\)(?:\\\\)*)\\\|")
 pattern_bar_sp = re.compile(r"(?:(?<!\\)(?:\\\\)*)\|")
 
 
-def escapeNTB(st: str, bar: bool = True) -> str:
+def replaceStringTable(
+	rplList: "List[Tuple[str, str]]",
+) -> "Callable[[str], str]":
+	def replace(st: str) -> str:
+		for rpl in rplList:
+			st = st.replace(rpl[0], rpl[1])
+		return st
+	return replace
+
+
+def escapeNTB(st: str, bar: bool = False) -> str:
 	"""
 		scapes Newline, Tab, Baskslash, and vertical Bar (if bar=True)
 	"""
-	st = st.replace(r"\\", r"\\\\")
+	st = st.replace("\\", "\\\\")
 	st = st.replace("\t", r"\t")
+	st = st.replace("\r", "")
 	st = st.replace("\n", r"\n")
 	if bar:
 		st = st.replace("|", r"\|")
@@ -79,7 +85,7 @@ def unescapeNTB(st: str, bar: bool = False) -> str:
 	return st
 
 
-def splitByBarUnescapeNTB(st: str) -> List[str]:
+def splitByBarUnescapeNTB(st: str) -> "List[str]":
 	"""
 		splits by "|" (and not "\\|") then unescapes Newline (\\n),
 			Tab (\\t), Baskslash (\\) and Bar (\\|) in each part
@@ -107,38 +113,29 @@ def formatHMS(h: int, m: int, s: int) -> str:
 		return f"{h:02d}:{m:02d}:{s:02d}"
 
 
-def timeHMS(seconds: Union[int, float]) -> str:
-	import time
-	(h, m, s) = time.gmtime(int(seconds))[3:6]
-	return formatHMS(h, m, s)
-
-
-def relTimeHMS(seconds: Union[int, float]) -> str:
-	(days, s) = divmod(int(seconds), 24 * 3600)
-	(m, s) = divmod(s, 60)
-	(h, m) = divmod(m, 60)
-	return formatHMS(h, m, s)
-
 # ___________________________________________ #
 
 
-def intToBinStr(n: int, stLen: int = 0) -> bytes:
-	bs = []
-	while n > 0:
-		bs.insert(0, n & 0xff)
-		n >>= 8
-	return bytes(bs).rjust(stLen, b"\x00")
+def uint32ToBytes(n: int) -> bytes:
+	return struct.pack('>I', n)
 
 
-def binStrToInt(bs: AnyStr) -> int:
-	bs = toBytes(bs)
+def uint32FromBytes(bs: bytes) -> int:
+	return struct.unpack('>I', bs)[0]
+
+
+def uintFromBytes(bs: bytes) -> int:
 	n = 0
 	for c in bs:
 		n = (n << 8) + c
 	return n
 
 
+def crc32hex(bs: bytes) -> str:
+	return struct.pack('>I', binascii.crc32(bs) & 0xffffffff).hex()
+
 # ___________________________________________ #
+
 
 def urlToPath(url: str) -> str:
 	if not url.startswith("file://"):
@@ -172,26 +169,6 @@ def replacePostSpaceChar(st: str, ch: str) -> str:
 	)
 
 
-def runDictzip(filename: str) -> None:
-	import subprocess
-	dictzipCmd = "/usr/bin/dictzip"  # Save in pref FIXME
-	if not os.path.isfile(dictzipCmd):
-		return False
-	if filename[-4:] == ".ifo":
-		filename = filename[:-4]
-	(out, err) = subprocess.Popen(
-		[dictzipCmd, filename + ".dict"],
-		stdout=subprocess.PIPE
-	).communicate()
-#	out = p3[1].read()
-#	err = p3[2].read()
-#	log.debug(f"dictzip command: {dictzipCmd!r}")
-#	if err:
-#		log.error(f"dictzip error: {err.replace('\n', ' ')}")
-#	if out:
-#		log.error(f"dictzip error: {out.replace('\n', ' ')}")
-
-
 def isControlChar(y: int) -> bool:
 	# y: char code
 	if y < 32 and chr(y) not in "\t\n\r\v":
@@ -202,7 +179,7 @@ def isControlChar(y: int) -> bool:
 	return False
 
 
-def isASCII(data: str, exclude: Optional[List[str]] = None) -> bool:
+def isASCII(data: str, exclude: "Optional[List[str]]" = None) -> bool:
 	if exclude is None:
 		exclude = []
 	for c in data:

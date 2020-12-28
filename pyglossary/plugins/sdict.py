@@ -28,9 +28,8 @@ extensions = (".dct",)
 singleFile = True
 # homepage = "http://swaj.net/sdict/"
 optionsProp = {
-	"encoding": EncodingOption(),
+	# "encoding": EncodingOption(),  # TODO: needed?
 }
-depends = {}
 
 tools = [
 	{
@@ -87,7 +86,7 @@ def read_raw(s, fe):
 
 
 def read_str(s, fe):
-	read_raw(s, fe).replace(b"\x00", b"")
+	return read_raw(s, fe).replace(b"\x00", b"")
 
 
 def read_int(s, fe=None):
@@ -125,7 +124,7 @@ class Header(object):
 	def parse(self, st):
 		self.signature = read_str(st, self.f_signature)
 		if self.signature != b"sdct":
-			raise ValueError("Not a valid sdict dictionary")
+			raise ValueError(f"Not a valid sdict dictionary: signature={self.signature}")
 		self.word_lang = read_str(st, self.f_input_lang)
 		self.article_lang = read_str(st, self.f_output_lang)
 		self.short_index_length = read_int(st, self.f_length_of_short_index)
@@ -144,6 +143,8 @@ class Header(object):
 
 
 class Reader(object):
+	# _encoding: str = "utf-8"
+
 	def __init__(self, glos):
 		self._glos = glos
 		self.clear()
@@ -151,10 +152,9 @@ class Reader(object):
 	def clear(self):
 		self._file = None
 		self._filename = ""
-		self._encoding = ""
 		self._header = Header()
 
-	def open(self, filename, encoding="utf-8"):
+	def open(self, filename):
 		self._file = open(filename, "rb")
 		h = self._header
 		h.parse(self._file.read(43))
@@ -162,11 +162,12 @@ class Reader(object):
 		self.short_index = self.readShortIndex()
 		self._glos.setInfo("name", self.readUnit(h.title_offset))
 		self._glos.setInfo("version", self.readUnit(h.version_offset))
-		self._glos.setInfo("copyright",self.readUnit(h.copyright_offset))
+		self._glos.setInfo("copyright", self.readUnit(h.copyright_offset))
 		log.debug(f"SDict word count: {len(self)}")  # correct? FIXME
 
 	def close(self):
-		self._file.close()
+		if self._file:
+			self._file.close()
 		self.clear()
 
 	def __len__(self):

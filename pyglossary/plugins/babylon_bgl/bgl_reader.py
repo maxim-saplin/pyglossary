@@ -3,8 +3,8 @@
 # Copyright © 2008-2020 Saeed Rasooli <saeed.gnu@gmail.com> (ilius)
 # Copyright © 2011-2012 kubtek <kubtek@gmail.com>
 # This file is part of PyGlossary project, http://github.com/ilius/pyglossary
-# Thanks to Raul Fernandes <rgfbr@yahoo.com.br> and Karl Grill
-#	   for reverse engineering
+# Thanks to Raul Fernandes <rgfbr@yahoo.com.br> and Karl Grill for reverse
+# engineering as part of https://sourceforge.net/projects/ktranslator/
 #
 # This program is a free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -41,15 +41,14 @@ except ImportError:
 	)
 
 from pyglossary.text_utils import (
-	binStrToInt,
+	uintFromBytes,
 	excMessage,
 )
 
 from pyglossary.xml_utils import xml_escape
 
 from .bgl_info import (
-	infoKeysByCode,
-	infoKeyDecodeMethods,
+	infoType3ByCode,
 	charsetInfoDecode,
 )
 from .bgl_pos import partOfSpeechByCode
@@ -87,7 +86,7 @@ optionsProp = {
 	"noControlSequenceInDefi": BoolOption(),
 	"strictStringConvertion": BoolOption(),
 	"processHtmlInKey": BoolOption(),
-	"keyRStripChars": StrOption(),
+	"keyRStripChars": StrOption(multiline=True),
 
 	# debug read options:
 	"searchCharSamples": BoolOption(),
@@ -161,15 +160,14 @@ class FileOffS(file):
 	byte of the modeled file.
 	"""
 	def __init__(self, filename, offset=0):
-		fp = open(filename, "rb")
-		file.__init__(self, fp)
-		self._fp = fp
+		fileObj = open(filename, "rb")
+		file.__init__(self, fileObj)
+		self._fileObj = fileObj
 		self.offset = offset
-		self.filesize = os.path.getsize(filename)
 		file.seek(self, offset)  # OR self.seek(0)
 
 	def close(self):
-		self._fp.close()
+		self._fileObj.close()
 
 	def seek(self, pos, whence=0):  # position, whence
 		if whence == 0:  # relative to start of file
@@ -246,6 +244,25 @@ class DefinitionFields(object):
 
 
 class BglReader(object):
+	_defaultEncodingOverwrite = ""
+	_sourceEncodingOverwrite = ""
+	_targetEncodingOverwrite = ""
+	_partOfSpeechColor = "007000"
+	_noControlSequenceInDefi = False
+	_strictStringConvertion = False
+	# process keys and alternates as HTML
+	# Babylon does not interpret keys and alternates as HTML text,
+	# however you may encounter many keys containing character references
+	# and html tags. That is clearly a bug of the dictionary.
+	# We must be very careful processing HTML tags in keys, not damage
+	# normal keys. This option should be disabled by default, enabled
+	# explicitly by user. Namely this option does the following:
+	# - resolve character references
+	# - strip HTML tags
+	_processHtmlInKey = False
+	# a string of characters that will be stripped from the end of the
+	# key (and alternate), see str.rstrip function
+	_keyRStripChars = ""
 
 	##########################################################################
 	"""
@@ -307,8 +324,7 @@ class BglReader(object):
 		# offset of gzip header, set in self.open()
 		self.gzipOffset = None
 		# must be a in RRGGBB format
-		self.partOfSpeechColor = "007000"
-		self.iconData = None
+		self.iconDataList = []
 
 	def __len__(self):
 		if self.numEntries is None:
@@ -321,50 +337,8 @@ class BglReader(object):
 	def open(
 		self,
 		filename,
-		defaultEncodingOverwrite="",
-		sourceEncodingOverwrite="",
-		targetEncodingOverwrite="",
-		partOfSpeechColor="",
-		noControlSequenceInDefi=False,
-		strictStringConvertion=False,
-		# process keys and alternates as HTML
-		# Babylon does not interpret keys and alternates as HTML text,
-		# however you may encounter many keys containing character references
-		# and html tags. That is clearly a bug of the dictionary.
-		# We must be very careful processing HTML tags in keys, not damage
-		# normal keys. This option should be disabled by default, enabled
-		# explicitly by user. Namely this option does the following:
-		# - resolve character references
-		# - strip HTML tags
-		processHtmlInKey=False,
-		# a string of characters that will be stripped from the end of the
-		# key (and alternate), see str.rstrip function
-		keyRStripChars="",
-		**kwargs
 	):
-		if kwargs:
-			for key in kwargs:
-				if key in debugReadOptions:
-					log.error(
-						f"BGL Reader: option {key!r} is only usable"
-						f"in debug mode, add -v4 to enable debug mode"
-					)
-				else:
-					log.error(f"BGL Reader: invalid option {key!r}")
-			return False
-
 		self._filename = filename
-		self.defaultEncodingOverwrite = defaultEncodingOverwrite
-		self.sourceEncodingOverwrite = sourceEncodingOverwrite
-		self.targetEncodingOverwrite = targetEncodingOverwrite
-
-		if partOfSpeechColor:
-			self.partOfSpeechColor = partOfSpeechColor
-
-		self.noControlSequenceInDefi = noControlSequenceInDefi
-		self.strictStringConvertion = strictStringConvertion
-		self.processHtmlInKey = processHtmlInKey
-		self.keyRStripChars = keyRStripChars
 
 		if not self.openGzip():
 			return False
@@ -388,7 +362,7 @@ class BglReader(object):
 			log.error(f"invalid header: {b_head[:6]!r}")
 			return False
 
-		self.gzipOffset = gzipOffset = binStrToInt(b_head[4:6])
+		self.gzipOffset = gzipOffset = uintFromBytes(b_head[4:6])
 		log.debug(f"Position of gz header: {gzipOffset}")
 
 		if gzipOffset < 6:
@@ -463,9 +437,13 @@ class BglReader(object):
 		glos = self._glos
 		###
 		if self.sourceLang:
-			glos.setInfo("sourceLang", self.sourceLang.name)
+			glos.sourceLangName = self.sourceLang.name
+			if self.sourceLang.name2:
+				glos.setInfo("sourceLang2", self.sourceLang.name2)
 		if self.targetLang:
-			glos.setInfo("targetLang", self.targetLang.name)
+			glos.targetLangName = self.targetLang.name
+			if self.targetLang.name2:
+				glos.setInfo("targetLang2", self.targetLang.name2)
 		###
 		for attr in (
 			"defaultCharset",
@@ -482,15 +460,17 @@ class BglReader(object):
 		glos.setInfo("sourceCharset", "UTF-8")
 		glos.setInfo("targetCharset", "UTF-8")
 		###
+		if "lastUpdated" not in self.info:
+			if "bgl_firstUpdated" in self.info:
+				log.debug(f"replacing bgl_firstUpdated with lastUpdated")
+				self.info["lastUpdated"] = self.info.pop("bgl_firstUpdated")
+		###
 		for key, value in self.info.items():
 			if value == "":
 				continue # TODO: a bool flag to add empty value infos?
 			# leave "creationTime" and "lastUpdated" as is
 			if key in {
-				"middleUpdated",
 				"utf8Encoding",
-				"spellingAlternatives",
-				"caseSensitive",
 			}:
 				key = "bgl_" + key
 			try:
@@ -588,7 +568,7 @@ class BglReader(object):
 				f", but found {len(buf)} bytes"
 			)
 			return -1
-		return binStrToInt(buf)
+		return uintFromBytes(buf)
 
 	def readType0(self, block):
 		code = block.data[0]
@@ -596,7 +576,7 @@ class BglReader(object):
 			# this number is vary close to self.bgl_numEntries,
 			# but does not always equal to the number of entries
 			# see self.readType3, code == 12 as well
-			num = binStrToInt(block.data[1:])
+			num = uintFromBytes(block.data[1:])
 		elif code == 8:
 			self.defaultCharset = charsetInfoDecode(block.data[1:])
 			if not self.defaultCharset:
@@ -657,13 +637,13 @@ class BglReader(object):
 			reads block with type 3, and updates self.info
 			returns None
 		"""
-		code, b_value = binStrToInt(block.data[:2]), block.data[2:]
+		code, b_value = uintFromBytes(block.data[:2]), block.data[2:]
 		if not b_value:
 			return
 		# if not b_value.strip(b"\x00"): return  # FIXME
 
 		try:
-			key = infoKeysByCode[code]
+			item = infoType3ByCode[code]
 		except KeyError:
 			if b_value.strip(b"\x00"):
 				log.debug(
@@ -671,12 +651,18 @@ class BglReader(object):
 				)
 			return
 
+		key = item.name
+		decode = item.decode
+
+		if key.endswith(".ico"):
+			self.iconDataList.append((key, b_value))
+			return
+
 		value = None
-		func = infoKeyDecodeMethods.get(key)
-		if func is None:
+		if decode is None:
 			value = b_value
 		else:
-			value = func(b_value)
+			value = decode(b_value)
 
 		# `value` can be None, str, bytes or dict
 
@@ -687,17 +673,7 @@ class BglReader(object):
 			self.info.update(value)
 			return
 
-		if key in {
-			"sourceLang",
-			"targetLang",
-			"defaultCharset",
-			"sourceCharset",
-			"targetCharset",
-			"sourceEncoding",
-			"targetEncoding",
-			"bgl_numEntries",
-			"iconData",
-		}:
+		if item.attr:
 			setattr(self, key, value)
 			return
 
@@ -709,8 +685,15 @@ class BglReader(object):
 		"""
 		utf8Encoding = self.info.get("utf8Encoding", False)
 
-		if self.sourceEncodingOverwrite:
-			self.sourceEncoding = self.sourceEncodingOverwrite
+		if self._defaultEncodingOverwrite:
+			self.defaultEncoding = self._defaultEncodingOverwrite
+		elif self.defaultCharset:
+			self.defaultEncoding = self.defaultCharset
+		else:
+			self.defaultEncoding = "cp1252"
+
+		if self._sourceEncodingOverwrite:
+			self.sourceEncoding = self._sourceEncodingOverwrite
 		elif utf8Encoding:
 			self.sourceEncoding = "utf-8"
 		elif self.sourceCharset:
@@ -718,10 +701,10 @@ class BglReader(object):
 		elif self.sourceLang:
 			self.sourceEncoding = self.sourceLang.encoding
 		else:
-			self.sourceEncoding = "cp1252"
+			self.sourceEncoding = self.defaultEncoding
 
-		if self.targetEncodingOverwrite:
-			self.targetEncoding = self.targetEncodingOverwrite
+		if self._targetEncodingOverwrite:
+			self.targetEncoding = self._targetEncodingOverwrite
 		elif utf8Encoding:
 			self.targetEncoding = "utf-8"
 		elif self.targetCharset:
@@ -729,15 +712,7 @@ class BglReader(object):
 		elif self.targetLang:
 			self.targetEncoding = self.targetLang.encoding
 		else:
-			self.targetEncoding = "cp1252"
-
-		# not used
-		if self.defaultEncodingOverwrite:
-			self.defaultEncoding = self.defaultEncodingOverwrite
-		elif self.defaultCharset:
-			self.defaultEncoding = self.defaultCharset
-		else:
-			self.defaultEncoding = "cp1252"
+			self.targetEncoding = self.defaultEncoding
 
 	def logUnknownBlock(self, block):
 		log.debug(
@@ -747,11 +722,12 @@ class BglReader(object):
 		)
 
 	def __iter__(self):
-		return self
-
-	def __next__(self):
 		if not self.file:
-			raise StopIteration
+			raise RuntimeError("iterating over a reader while it's not open")
+
+		for fname, iconData in self.iconDataList:
+			yield self._glos.newDataEntry(fname, iconData)
+
 		block = Block()
 		while not self.isEndOfDictData():
 			if not self.readBlock(block):
@@ -760,14 +736,14 @@ class BglReader(object):
 				continue
 
 			if block.type == 2:
-				return self.readType2(block)
+				yield self.readType2(block)
 
 			elif block.type == 11:
 				succeed, u_word, u_alts, u_defi = self.readEntry_Type11(block)
 				if not succeed:
 					continue
 
-				return self._glos.newEntry(
+				yield self._glos.newEntry(
 					[u_word] + u_alts,
 					u_defi,
 				)
@@ -795,12 +771,10 @@ class BglReader(object):
 				)
 				if not succeed:
 					continue
-				return self._glos.newEntry(
+				yield self._glos.newEntry(
 					[u_word] + u_alts,
 					u_defi,
 				)
-
-		raise StopIteration
 
 	def readEntryWord(self, block, pos):
 		"""
@@ -863,7 +837,7 @@ class BglReader(object):
 				f", reading defi size: pos + 2 > len(block.data)"
 			)
 			return Err
-		Len = binStrToInt(block.data[pos:pos + 2])
+		Len = uintFromBytes(block.data[pos:pos + 2])
 		pos += 2
 		if pos + Len > len(block.data):
 			log.error(
@@ -927,7 +901,7 @@ class BglReader(object):
 				f", reading word size: pos + 5 > len(block.data)"
 			)
 			return Err
-		wordLen = binStrToInt(block.data[pos:pos + 5])
+		wordLen = uintFromBytes(block.data[pos:pos + 5])
 		pos += 5
 		if pos + wordLen > len(block.data):
 			log.error(
@@ -948,7 +922,7 @@ class BglReader(object):
 				f", reading defi size: pos + 4 > len(block.data)"
 			)
 			return Err
-		altsCount = binStrToInt(block.data[pos:pos + 4])
+		altsCount = uintFromBytes(block.data[pos:pos + 4])
 		pos += 4
 
 		# reading alts
@@ -961,7 +935,7 @@ class BglReader(object):
 					f", reading alt size: pos + 4 > len(block.data)"
 				)
 				return Err
-			altLen = binStrToInt(block.data[pos:pos + 4])
+			altLen = uintFromBytes(block.data[pos:pos + 4])
 			pos += 4
 			if altLen == 0:
 				if pos + altLen != len(block.data):
@@ -989,7 +963,7 @@ class BglReader(object):
 		u_alts = list(sorted(u_alts))
 
 		# reading defi
-		defiLen = binStrToInt(block.data[pos:pos + 4])
+		defiLen = uintFromBytes(block.data[pos:pos + 4])
 		pos += 4
 		if pos + defiLen > len(block.data):
 			log.error(
@@ -1050,7 +1024,7 @@ class BglReader(object):
 					self.charReferencesStat(b_text2, encoding)
 					if encoding == "cp1252":
 						b_text2 = replaceAsciiCharRefs(b_text2, encoding)
-					if self.strictStringConvertion:
+					if self._strictStringConvertion:
 						try:
 							u_text2 = b_text2.decode(encoding)
 						except UnicodeError:
@@ -1121,7 +1095,7 @@ class BglReader(object):
 				f"number of dollar indexes = {strip_count}",
 			)
 		# convert to unicode
-		if self.strictStringConvertion:
+		if self._strictStringConvertion:
 			try:
 				u_word_main = b_word_main.decode(self.sourceEncoding)
 			except UnicodeError:
@@ -1135,7 +1109,7 @@ class BglReader(object):
 		else:
 			u_word_main = b_word_main.decode(self.sourceEncoding, "ignore")
 
-		if self.processHtmlInKey:
+		if self._processHtmlInKey:
 			# u_word_main_orig = u_word_main
 			u_word_main = stripHtmlTags(u_word_main)
 			u_word_main = replaceHtmlEntriesInKeys(u_word_main)
@@ -1145,8 +1119,8 @@ class BglReader(object):
 		u_word_main = removeControlChars(u_word_main)
 		u_word_main = removeNewlines(u_word_main)
 		u_word_main = u_word_main.lstrip()
-		if self.keyRStripChars:
-			u_word_main = u_word_main.rstrip(self.keyRStripChars)
+		if self._keyRStripChars:
+			u_word_main = u_word_main.rstrip(self._keyRStripChars)
 		return u_word_main
 
 	def processAlternativeKey(self, b_word, b_key):
@@ -1156,7 +1130,7 @@ class BglReader(object):
 		"""
 		b_word_main, strip_count = stripDollarIndexes(b_word)
 		# convert to unicode
-		if self.strictStringConvertion:
+		if self._strictStringConvertion:
 			try:
 				u_word_main = b_word_main.decode(self.sourceEncoding)
 			except UnicodeError:
@@ -1174,7 +1148,7 @@ class BglReader(object):
 			u_word_main,
 		)
 
-		if self.processHtmlInKey:
+		if self._processHtmlInKey:
 			# u_word_main_orig = u_word_main
 			u_word_main = stripHtmlTags(u_word_main)
 			u_word_main = replaceHtmlEntriesInKeys(u_word_main)
@@ -1184,7 +1158,7 @@ class BglReader(object):
 		u_word_main = removeControlChars(u_word_main)
 		u_word_main = removeNewlines(u_word_main)
 		u_word_main = u_word_main.lstrip()
-		u_word_main = u_word_main.rstrip(self.keyRStripChars)
+		u_word_main = u_word_main.rstrip(self._keyRStripChars)
 		return u_word_main
 
 	def processDefi(self, b_defi, b_key):
@@ -1280,6 +1254,7 @@ class BglReader(object):
 				fields.b_field_1a,
 				self.sourceEncoding,
 			)
+			log.info(f"------- u_field_1a = {fields.u_field_1a}")
 
 		self.processDefiStat(fields, b_defi, b_key)
 
@@ -1287,7 +1262,7 @@ class BglReader(object):
 		if fields.partOfSpeech or fields.u_title:
 			if fields.partOfSpeech:
 				pos = xml_escape(fields.partOfSpeech)
-				posColor = self.partOfSpeechColor
+				posColor = self._partOfSpeechColor
 				u_defi_format += f'<font color="#{posColor}">{pos}</font>'
 			if fields.u_title:
 				if u_defi_format:
@@ -1323,7 +1298,7 @@ class BglReader(object):
 		by space, we assume this is part of the article and continue search.
 		Unfortunately this does no help in many cases...
 		"""
-		if self.noControlSequenceInDefi:
+		if self._noControlSequenceInDefi:
 			return -1
 		index = -1
 		while True:
@@ -1501,7 +1476,7 @@ class BglReader(object):
 					)
 					return
 				i += 1
-				Len = binStrToInt(b_defi[i:i + 2])
+				Len = uintFromBytes(b_defi[i:i + 2])
 				i += 2
 				if Len == 0:
 					log.debug(
@@ -1572,7 +1547,7 @@ class BglReader(object):
 					return
 				fields.code_transcription_60 = b_defi[i + 1]
 				i += 2
-				Len = binStrToInt(b_defi[i:i + 2])
+				Len = uintFromBytes(b_defi[i:i + 2])
 				i += 2
 				if Len == 0:
 					log.debug(

@@ -1,4 +1,5 @@
-PyGlossary - A tool for workig with dictionary databases
+PyGlossary - A tool for converting dictionary files
+
 Copyright © 2008-2020 Saeed Rasooli
 This program is free software; you can redistribute it
 and/or modify it under the terms of the GNU General Public
@@ -14,4 +15,4 @@ PURPOSE. See the GNU General Public License for more details.
 You should have received a copy of the GNU General Public
 License along with this program. Or on Debian systems,
 from /usr/share/common-licenses/GPL.
-If not, see <http://www.gnu.org/licenses/gpl.txt>.
+If not, see http://www.gnu.org/licenses/gpl.txt
